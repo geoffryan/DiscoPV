@@ -1,0 +1,22 @@
+#Build Products
+
+libDiscoReader.so
+libDiscoReader.dylib
+
+#Intermediate CMake stuff
+DiscoReader*
+vtkSMXML*
+*ClientServer.cxx
+doc
+
+cmake_install.cmake
+Makefile
+CMakeFiles
+
+*.xsl
+*.args
+*.txt
+*.data
+
+#Other stuff
+*.swp
