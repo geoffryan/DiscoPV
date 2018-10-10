@@ -1,1 +1,1 @@
-cp discoReader.dylib $HOME/.config/ParaView/ParaView5.6.0/.plugins/
+cp libDiscoReader.dylib $HOME/.config/ParaView/ParaView5.6.0/.plugins/

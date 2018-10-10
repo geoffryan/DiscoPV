@@ -1,1 +1,29 @@
-<xml/>
+<ServerManagerConfiguration>
+    <ProxyGroup name="sources">
+        <!-- ============================================================== -->
+        <SourceProxy name="DiscoReader" class="vtkDiscoReader"  
+            label="DiscoReader">
+            <Documentation
+                long_help="Read a Disco Checkpoint (.h5) file."
+                short_help="Read a Disco Checkpoint (.h5) file.">
+            </Documentation>
+                <StringVectorProperty
+                    name="Filename"
+                    animateable="0"
+                    command="SetFileName"
+                    number_of_elements="1">
+                    <FileListDomain name="files" />
+                    <Documentation>
+                        This property specifies the file name for Disco Reader.
+                    </Documentation>
+                </StringVectorProperty>
+
+                <Hints>
+                    <ReaderFactory extensions="h5"
+                                    file_description="HDF5 File Format" />
+                </Hints>
+        </SourceProxy>
+        <!-- End DiscoReader -->
+    </ProxyGroup>
+    <!-- End Filters Group -->
+</ServerManagerConfiguration>
