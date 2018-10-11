@@ -20,7 +20,7 @@
 
             <Hints>
                 <ReaderFactory extensions="h5"
-                                file_description="HDF5 File Format" />
+                                file_description="Disco Checkpoints" />
             </Hints>
         </SourceProxy>
         <!-- End DiscoReader -->
