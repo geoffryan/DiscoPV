@@ -1,13 +1,13 @@
 #ifndef vtkDiscoReader_h
 #define vtkDiscoReader_h
 
-#include "vtkStructuredGridAlgorithm.h"
+#include "vtkUnstructuredGridAlgorithm.h"
 
-class vtkDiscoReader : public vtkStructuredGridAlgorithm
+class vtkDiscoReader : public vtkUnstructuredGridAlgorithm
 {
 public:
     static vtkDiscoReader *New();
-    vtkTypeMacro(vtkDiscoReader, vtkStructuredGridAlgorithm);
+    vtkTypeMacro(vtkDiscoReader, vtkUnstructuredGridAlgorithm);
 
     int CanReadFile(const char *fname);
     vtkSetStringMacro(FileName);
@@ -21,6 +21,8 @@ protected:
                             vtkInformationVector*) override;
 
     char *FileName;
+private:
+    int which4(double, double, double, double);
 };
 
 #endif
