@@ -1,6 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <cmath>
+#include <vector>
 #include "vtkCellArray.h"
 #include "vtkCellData.h"
 #include "vtkCellType.h"
@@ -10,9 +11,6 @@
 #include "vtkUnstructuredGrid.h"
 #include "vtkPoints.h"
 #include "vtkStreamingDemandDrivenPipeline.h"
-
-#define H5_USE_16_API
-#include <vtk_hdf5.h>
 
 #include "vtkDiscoReader.h"
 
@@ -71,81 +69,189 @@ int vtkDiscoReader::RequestData(vtkInformation*, vtkInformationVector**,
     vtkUnstructuredGrid *outData = vtkUnstructuredGrid::SafeDownCast
                                 (outInfo->Get(vtkDataObject::DATA_OBJECT()));
 
-    int Nr = 32;
-    int Nz = 32;
-    int Np = 64;
+    this->MakeGridHexahedron(outData);
 
-    double zmin = -0.5;
-    double zmax = 0.5;
-    double rmin = 0.1;
-    double rmax = 1.0;
-    double phimin = 0.0;
-    double phimax = 1.5*M_PI;
+    int Nz = this->Nz;
+    int Nr = this->Nr;
+    int nc = this->ncells;
+    double rmin = this->rjmh[0];
+    double rmax = this->rjmh[Nr];
+    double zmin = this->zkmh[0];
+    double zmax = this->zkmh[Nz];
 
-    double rjmh[Nr+1];
-    double zkmh[Nz+1];
-    double pimh[Nr*Nz][Np+1];
+
+    vtkDoubleArray *arho = vtkDoubleArray::New();
+    arho->SetName("rho");
+    arho->SetNumberOfValues(nc);
+    vtkDoubleArray *aP = vtkDoubleArray::New();
+    aP->SetName("P");
+    aP->SetNumberOfValues(nc);
+    vtkDoubleArray *aom = vtkDoubleArray::New();
+    aom->SetName("om");
+    aom->SetNumberOfValues(nc);
+    
+    vtkDoubleArray *av = vtkDoubleArray::New();
+    av->SetName("v");
+    av->SetNumberOfComponents(3);
+    av->SetNumberOfTuples(nc);
 
     int i,j,k;
 
-    for(j=0; j<=Nr; j++)
-        rjmh[j] = rmin + j*(rmax-rmin)/Nr;
+    int s = 0;
+    for(k=0; k<Nz; k++)
+    {
+        double z = 0.5*(this->zkmh[k] + this->zkmh[k+1]);
+        for(j=0; j<Nr; j++)
+        {
+            double r = 0.5*(this->rjmh[j]+this->rjmh[j+1]);
 
-    for(k=0; k<=Nz; k++)
-        zkmh[k] = zmin + k*(zmax-zmin)/Nz;
+            int jk = Nr*k + j;
+
+            for(i=0; i<this->Np[jk]; i++)
+            {
+                double phi = 0.5*(this->pimh[jk][i]+this->pimh[jk][i+1]);
+                
+                double vr = 0.1*(rand()*2.0/RAND_MAX-1);
+                double vp = sqrt(1./r);
+                double V[3] = {vr*cos(phi) - vp*sin(phi), vr*sin(phi)+vp*cos(phi), 0.0};
+
+                double R = rmin + (rmax-rmin)*phi/(2*M_PI);
+                double Z = zmin + (zmax-zmin)*phi/(2*M_PI);
+                double sig = 0.1;
+                double phase = -((r-R)*(r-R) +(z-Z)*(z-Z)) / (2*sig*sig);
+                double rho = 1.0 + 1.0*exp(phase);
+                double P = phi;
+                double om = pow(r, -1.5);
+
+                int c;
+                for(c=0; c<this->ncellspercell[jk][i]; c++)
+                {
+                    arho->SetValue(s, rho);
+                    aP->SetValue(s, P);
+                    aom->SetValue(s, om);
+                    av->SetTuple(s, V);
+                    s++;
+                }
+
+
+            }
+        }
+    }
+
+    outData->GetCellData()->AddArray(arho);
+    outData->GetCellData()->AddArray(aP);
+    outData->GetCellData()->AddArray(aom);
+    outData->GetCellData()->AddArray(av);
+
+    arho->Delete();
+    aP->Delete();
+    aom->Delete();
+    av->Delete();
+
+    myfile.open("/Users/geoff/Projects/DiscoPV/data2.txt");
+    myfile << "line";
+    myfile.close();
+    
+    return 1;
+}
+
+void vtkDiscoReader::MakeGridHexahedron(vtkUnstructuredGrid *output)
+{
+    double phimin = 0.0;
+    double phimax;
+    readSimple("Pars", "Phi_Max", &phimax, H5T_NATIVE_DOUBLE);
+    hsize_t dims[3];
+    getH5dims("Grid", "r_jph", dims);
+    int Nr = dims[0] - 1;
+    getH5dims("Grid", "z_kph", dims);
+    int Nz = dims[0] - 1;
+
+    this->Nz = Nz;
+    this->Nr = Nr;
+    this->phimax = phimax;
+
+    this->rjmh.reserve(Nr+1);
+    this->zkmh.reserve(Nz+1);
+    this->Np.reserve(Nz*Nr);
+    this->Index.reserve(Nz*Nr);
+    this->Id_phi0.reserve(Nz*Nr);
+    this->pimh.reserve(Nr*Nz);
+
+    readSimple("Grid", "r_jph", this->rjmh.data(), H5T_NATIVE_DOUBLE);
+    readSimple("Grid", "z_kph", this->zkmh.data(), H5T_NATIVE_DOUBLE);
+    readSimple("Grid", "Np", this->Np.data(), H5T_NATIVE_INT);
+    readSimple("Grid", "Index", this->Index.data(), H5T_NATIVE_INT);
+    readSimple("Grid", "Id_phi0", this->Id_phi0.data(), H5T_NATIVE_INT);
+
+    int i,j,k;
 
     srand(42);
     rand();
     rand();
-    
-    double dphi = (phimax-phimin) / Np;
+
+    int jk;
+    for(jk=0; jk<Nr*Nz; jk++)
+        this->pimh.push_back(std::vector<double>(this->Np[jk]+1));
 
     for(k=0; k<Nz; k++)
         for(j=0; j<Nr; j++)
         {
             int jk = Nr*k + j;
+            double dphi = (phimax-phimin) / this->Np[jk];
             double p0 = -rand()*dphi/RAND_MAX;
-            for(i=0; i<=Np; i++)
-                pimh[jk][i] = p0 + i*dphi;
+            for(i=0; i<=this->Np[jk]; i++)
+                this->pimh[jk][i] = p0 + i*dphi;
         }
     
+    ofstream myfile;
     myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
                     std::ios_base::app);
     myfile << "Made grid\n";
     myfile.close();
-
 
     vtkPoints* points = vtkPoints::New();
 
     vtkIdType npointsTot = 0;
     vtkIdType npoints[Nz+1][Nr+1];
     vtkIdType indexPoints[Nz+1][Nr+1];
-    vtkIdType cellPoints[Nz*Nr][4*(Np+1)];
+    std::vector<std::vector<vtkIdType>> cellPoints;
+    cellPoints.reserve(Nr*Nz);
+
+    for(jk=0; jk<Nr*Nz; jk++)
+            cellPoints.push_back(std::vector<vtkIdType>(4*(this->Np[jk]+1)));
 
     for(k=0; k<=Nz; k++)
         for(j=0; j<=Nr; j++)
         {
-            int na = 4;
-            if((j==0 && k==0) || (j==0 && k==Nz)
-                    || (j==Nr && k==0) || (j==Nr && k==Nz))
-                na = 1;
-            else if(j==0 || j==Nr || k==0 || k==Nz)
-                na = 2;
+            int jkDL = Nr*(k-1) + (j-1);
+            int jkDR = Nr*(k-1) + j;
+            int jkUL = Nr*k + (j-1);
+            int jkUR = Nr*k + j;
 
+            int np = 0;
+            if(j>0 && k>0)
+                np += this->Np[jkDL]+1;
+            if(j<Nr && k>0)
+                np += this->Np[jkDR]+1;
+            if(j>0 && k<Nz)
+                np += this->Np[jkUL]+1;
+            if(j<Nr && k<Nz)
+                np += this->Np[jkUR]+1;
+
+            npoints[k][j] = np;
             indexPoints[k][j] = npointsTot;
-            npoints[k][j] = na*(Np+1);
             npointsTot += npoints[k][j];
         }
     points->SetNumberOfPoints(npointsTot);
     
     myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
                     std::ios_base::app);
-    myfile << "Counted Points\n";
+    myfile << "Counted Points: " << npointsTot << "\n";
     myfile.close();
 
     for(k=0; k<=Nz; k++)
     {
-        double z = zkmh[k];
+        double z = this->zkmh[k];
 
         int kD = k-1;
         int kU = k;
@@ -157,7 +263,7 @@ int vtkDiscoReader::RequestData(vtkInformation*, vtkInformationVector**,
             int iUL = 0;
             int iUR = 0;
 
-            double r = rjmh[j];
+            double r = this->rjmh[j];
 
             int jL = j-1;
             int jR = j;
@@ -170,28 +276,26 @@ int vtkDiscoReader::RequestData(vtkInformation*, vtkInformationVector**,
             double phiDL, phiDR, phiUL, phiUR;
 
             if(kD >= 0 && jL >= 0)
-                phiDL = pimh[jkDL][0];
+                phiDL = this->pimh[jkDL][0];
             else
                 phiDL = HUGE;
             if(kD >= 0 && jR < Nr)
-                phiDR = pimh[jkDR][0];
+                phiDR = this->pimh[jkDR][0];
             else
                 phiDR = HUGE;
             if(kU < Nz && jL >= 0)
-                phiUL = pimh[jkUL][0];
+                phiUL = this->pimh[jkUL][0];
             else
                 phiUL = HUGE;
             if(kU < Nz && jR < Nr)
-                phiUR = pimh[jkUR][0];
+                phiUR = this->pimh[jkUR][0];
             else
                 phiUR = HUGE;
-         
-            /*
+    
             myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
-                            std::ios_base::app);
-            myfile << "k " << k << " j " << j << "\n";
+                    std::ios_base::app);
+            myfile << k << " " << j << "\n";
             myfile.close();
-            */
 
             for(i=0; i<npoints[k][j]; i++)
             {
@@ -229,34 +333,22 @@ int vtkDiscoReader::RequestData(vtkInformation*, vtkInformationVector**,
                     phimin = &phiUR;
                     opp = 0;
                 }
-                /*
 
-                myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
-                                std::ios_base::app);
-                myfile << s << " " << *phimin << " ";
-                myfile.close();
-                */
                 double x[3] = {r*cos(*phimin), r*sin(*phimin), z};
 
                 points->InsertPoint(s, x);
                 cellPoints[jkmin][4*(*imin)+opp] = s;
 
                 (*imin)++;
-                if(*imin <= Np)
-                    *phimin = pimh[jkmin][*imin];
+                if(*imin <= this->Np[jkmin])
+                    *phimin = this->pimh[jkmin][*imin];
                 else
                     *phimin = HUGE;
             }
-            /*
-            myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
-                            std::ios_base::app);
-            myfile <<  "\n";
-            myfile.close();
-            */
         }
     }
 
-    outData->SetPoints(points);
+    output->SetPoints(points);
     points->Delete();
     
     myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
@@ -265,23 +357,18 @@ int vtkDiscoReader::RequestData(vtkInformation*, vtkInformationVector**,
     myfile.close();
 
     int ncellsTot = 0;
-    int ncells[Nz*Nr][Np];
+    this->ncellspercell.reserve(Nz*Nr);
+    for(jk=0; jk<Nr*Nz; jk++)
+        this->ncellspercell.push_back(std::vector<int>(this->Np[jk]));
 
     vtkCellArray *cells = vtkCellArray::New();
 
-
     for(k=0; k<Nz; k++)
-    {
         for(j=0; j<Nr; j++)
         {
             int jk = Nr*k + j;
 
-            myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
-                std::ios_base::app);
-            myfile << "jk " << jk <<"\n";
-            myfile.close();
-
-            for(i=0; i<Np; i++)
+            for(i=0; i<this->Np[jk]; i++)
             {
                 vtkIdType sDLB = cellPoints[jk][4*i+0];
                 vtkIdType sDRB = cellPoints[jk][4*i+1];
@@ -299,22 +386,11 @@ int vtkDiscoReader::RequestData(vtkInformation*, vtkInformationVector**,
 
                 int nc = std::max(std::max(nDL,nDR), std::max(nUL,nUR));
 
-                ncells[jk][i] = nc;
+                this->ncellspercell[jk][i] = nc;
 
                 vtkIdType p[8] = {sDRB, sDLB, sULB, sURB, 
                             sDRB+1, sDLB+1, sULB+1, sURB+1};
                 cells->InsertNextCell(8, p);
-
-                /*
-                myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
-                    std::ios_base::app);
-                myfile << "p " << p[0] << " " << p[1] << " " << p[2]
-                            << " " << p[3] << " " << p[4] << " " << p[5]
-                            << " " << p[6] << " " << p[7] <<"\n";
-                myfile << "pF " << sDRF << " " << sDLF << " " << sULF << " " 
-                        << sURF << "\n";
-                myfile.close();
-                */
 
                 while(p[4] < sDRF || p[5] < sDLF || p[6] < sULF || p[7]<sURF)
                 {
@@ -331,238 +407,20 @@ int vtkDiscoReader::RequestData(vtkInformation*, vtkInformationVector**,
                     if(p[7] < sURF)
                         p[7]++;
                     cells->InsertNextCell(8, p);
-
-                    /*
-                    myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
-                        std::ios_base::app);
-                    myfile << p[4] << " " << p[5] << " " << p[6] << " " 
-                            << p[7] <<"\n";
-                    myfile.close();
-                    */
                 }
             }
         }
-    }
 
     int nc = cells->GetNumberOfCells();
+    this->ncells = nc;
 
-    outData->SetCells(VTK_HEXAHEDRON, cells);
+    output->SetCells(VTK_HEXAHEDRON, cells);
     cells->Delete();
     
     myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
                     std::ios_base::app);
     myfile << "Made Cells\n";
     myfile.close();
-
-    vtkDoubleArray *arho = vtkDoubleArray::New();
-    arho->SetName("rho");
-    arho->SetNumberOfValues(nc);
-    vtkDoubleArray *aP = vtkDoubleArray::New();
-    aP->SetName("P");
-    aP->SetNumberOfValues(nc);
-    vtkDoubleArray *aom = vtkDoubleArray::New();
-    aom->SetName("om");
-    aom->SetNumberOfValues(nc);
-    
-    vtkDoubleArray *av = vtkDoubleArray::New();
-    av->SetName("v");
-    av->SetNumberOfComponents(3);
-    av->SetNumberOfTuples(nc);
-
-    int s = 0;
-    for(k=0; k<Nz; k++)
-    {
-        double z = 0.5*(zkmh[k] + zkmh[k+1]);
-        for(j=0; j<Nr; j++)
-        {
-            double r = 0.5*(rjmh[j]+rjmh[j+1]);
-
-            int jk = Nr*k + j;
-
-            for(i=0; i<Np; i++)
-            {
-                double phi = 0.5*(pimh[jk][i]+pimh[jk][i+1]);
-                
-                double vr = 0.1*(rand()*2.0/RAND_MAX-1);
-                double vp = sqrt(1./r);
-                double V[3] = {vr*cos(phi) - vp*sin(phi), vr*sin(phi)+vp*cos(phi), 0.0};
-
-                double R = 0.2 + phi/(2*M_PI);
-                double Z = -0.5 + phi/(2*M_PI);
-                double sig = 0.1;
-                double phase = -((r-R)*(r-R) +(z-Z)*(z-Z)) / (2*sig*sig);
-                double rho = 1.0 + 1.0*exp(phase);
-                double P = phi;
-                double om = pow(r, -1.5);
-
-                int c;
-                for(c=0; c<ncells[jk][i]; c++)
-                {
-                    arho->SetValue(s, rho);
-                    aP->SetValue(s, P);
-                    aom->SetValue(s, om);
-                    av->SetTuple(s, V);
-                    s++;
-                }
-
-
-            }
-        }
-    }
-
-    outData->GetCellData()->AddArray(arho);
-    outData->GetCellData()->AddArray(aP);
-    outData->GetCellData()->AddArray(aom);
-    outData->GetCellData()->AddArray(av);
-
-    arho->Delete();
-    aP->Delete();
-    aom->Delete();
-    av->Delete();
-
-
-    /*
-            myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
-                            std::ios_base::app);
-            myfile << points->GetNumberOfPoints() << "\n";
-            myfile.close();
-
-
-            for(i=0; i<dims[0]; i++)
-            {
-                double phi = p0 + i*dphi;
-
-                int s = dims[0]*(dims[1]*0+0) + i;
-                double x[3] = {rm*cos(phi), rm*sin(phi), zm};
-                points->InsertPoint(s, x);
-
-                s = dims[0]*(dims[1]*0+1) + i;
-                x[0] = rp*cos(phi);
-                x[1] = rp*sin(phi);
-                x[2] = zm;
-                points->InsertPoint(s, x);
-
-                s = dims[0]*(dims[1]*1+0) + i;
-                x[0] = rm*cos(phi);
-                x[1] = rm*sin(phi);
-                x[2] = zp;
-                points->InsertPoint(s, x);
-
-                s = dims[0]*(dims[1]*1+1) + i;
-                x[0] = rp*cos(phi);
-                x[1] = rp*sin(phi);
-                x[2] = zp;
-                points->InsertPoint(s, x);
-            }
-
-            myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
-                            std::ios_base::app);
-            myfile << points->GetNumberOfPoints() << "\n";
-            myfile.close();
-
-            annulus->SetPoints(points);
-            points->Delete();
-
-            vtkDoubleArray *rho = vtkDoubleArray::New();
-            rho->SetName("rho");
-            rho->SetNumberOfValues((dims[0]-1)*(dims[1]-1)*(dims[2]-1));
-            vtkDoubleArray *P = vtkDoubleArray::New();
-            P->SetName("P");
-            P->SetNumberOfValues((dims[0]-1)*(dims[1]-1)*(dims[2]-1));
-            vtkDoubleArray *om = vtkDoubleArray::New();
-            om->SetName("om");
-            om->SetNumberOfValues((dims[0]-1)*(dims[1]-1)*(dims[2]-1));
-            
-            vtkDoubleArray *v = vtkDoubleArray::New();
-            v->SetName("v");
-            v->SetNumberOfComponents(3);
-            v->SetNumberOfTuples((dims[0]-1)*(dims[1]-1)*(dims[2]-1));
-
-            for(i=0; i<dims[0]-1; i++)
-            {
-                int s = i;
-                double phi = p0+(i+0.5)*dphi;
-
-                double vr = 0.1*(rand()*2.0/RAND_MAX-1);
-                double vp = sqrt(1./r);
-                double V[3] = {vr*cos(phi) - vp*sin(phi), vr*sin(phi)+vp*cos(phi), 0.0};
-
-                rho->SetValue(s, 1.0 + 0.1*(rand()*2.0/RAND_MAX-1));
-                P->SetValue(s, phi);
-                om->SetValue(s, pow(r, -1.5));
-                v->SetTuple(s, V);
-            }
-            annulus->GetCellData()->AddArray(rho);
-            annulus->GetCellData()->AddArray(P);
-            annulus->GetCellData()->AddArray(om);
-            annulus->GetCellData()->AddArray(v);
-            rho->Delete();
-            P->Delete();
-            om->Delete();
-            v->Delete();
-
-            myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
-                            std::ios_base::app);
-            myfile << annulus->GetNumberOfPoints() << "\n";
-            myfile.close();
-
-
-            outData->SetBlock(jk, annulus);
-            annulus->Delete();
-        }
-    */
-
-
-    /* 
-    int dims[3] = {7, 3, 2};
-
-    outData->SetDimensions(dims);
-    
-    outData->GetDimensions(dims);
-    myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", std::ios_base::app);
-    myfile << "\n" << dims[0] << dims[1] << dims[2];
-    myfile.close();
-
-    vtkPoints* points = vtkPoints::New();
-    points->Allocate(dims[0]*dims[1]*dims[2]);
-
-
-    for(k=0; k<dims[2]; k++)
-        for(j=0; j<dims[1]; j++)
-            for(i=0; i<dims[0]; i++)
-            {
-                double z = zmin + k*(zmax-zmin)/(dims[2]-1);
-                double r = rmin + j*(rmax-rmin)/(dims[1]-1);
-                double phi = phimin + i*(phimax-phimin)/(dims[0]-1);
-                double x[3] = {r*cos(phi), r*sin(phi), z};
-                int s = dims[1]*dims[0]*k + dims[0]*j + i;
-                points->InsertPoint(s, x);
-            }
-    outData->SetPoints(points);
-    points->Delete();
-
-
-    vtkDoubleArray *rho = vtkDoubleArray::New();
-    rho->SetName("rho");
-    rho->SetNumberOfValues((dims[0]-1)*(dims[1]-1)*(dims[2]-1));
-
-    for(k=0; k<dims[2]-1; k++)
-        for(j=0; j<dims[1]-1; j++)
-            for(i=0; i<dims[0]-1; i++)
-            {
-                int s = (dims[1]-1)*(dims[0]-1)*k + (dims[0]-1)*j + i;
-                double x = (double)s;
-                rho->SetValue(s, x);
-            }
-    outData->GetCellData()->SetScalars(rho);
-    rho->Delete();
-    */
-
-    myfile.open("/Users/geoff/Projects/DiscoPV/data2.txt");
-    myfile << "line";
-    myfile.close();
-    
-    return 1;
 }
 
 int vtkDiscoReader::which4(double x0, double x1, double x2, double x3)
@@ -599,3 +457,74 @@ int vtkDiscoReader::which4(double x0, double x1, double x2, double x3)
 }
 
 
+void vtkDiscoReader::getH5dims(const char *group, const char *dset, 
+                                hsize_t *dims)
+{
+    hid_t h5fil = H5Fopen(this->FileName, H5F_ACC_RDWR , H5P_DEFAULT );
+    hid_t h5grp = H5Gopen1( h5fil , group );
+    hid_t h5dst = H5Dopen1( h5grp , dset );
+    hid_t h5spc = H5Dget_space( h5dst );
+
+    H5Sget_simple_extent_dims( h5spc , dims , NULL);
+
+    H5Sclose( h5spc );
+    H5Dclose( h5dst );
+    H5Gclose( h5grp );
+    H5Fclose( h5fil );
+}
+
+void vtkDiscoReader::readSimple(const char *group, const char *dset, 
+                                void *data, hid_t type)
+{
+    hid_t h5fil = H5Fopen( this->FileName, H5F_ACC_RDWR, H5P_DEFAULT);
+    hid_t h5grp = H5Gopen1( h5fil , group );
+    hid_t h5dst = H5Dopen1( h5grp , dset );
+
+    H5Dread( h5dst , type , H5S_ALL , H5S_ALL , H5P_DEFAULT , data );
+
+    H5Dclose( h5dst );
+    H5Gclose( h5grp );
+    H5Fclose( h5fil );
+}
+
+void vtkDiscoReader::readPatch(const char *group, const char *dset, void *data, 
+                                hid_t type, int dim, int *start, 
+                                int *loc_size, int *glo_size)
+{
+    hid_t h5fil = H5Fopen( this->FileName , H5F_ACC_RDWR , H5P_DEFAULT );
+    hid_t h5grp = H5Gopen1( h5fil , group );
+    hid_t h5dst = H5Dopen1( h5grp , dset );
+
+    hsize_t mdims[dim];
+    hsize_t fdims[dim];
+
+    hsize_t fstart[dim];
+    hsize_t fstride[dim];
+    hsize_t fcount[dim];
+    hsize_t fblock[dim];
+
+    int d;
+    for( d=0 ; d<dim ; ++d )
+    {
+        mdims[d] = loc_size[d];
+        fdims[d] = glo_size[d];
+
+        fstart[d]  = start[d];
+        fstride[d] = 1;
+        fcount[d]  = loc_size[d];
+        fblock[d]  = 1;
+    }
+    hid_t mspace = H5Screate_simple(dim,mdims,NULL);
+    hid_t fspace = H5Screate_simple(dim,fdims,NULL);
+
+    H5Sselect_hyperslab( fspace , H5S_SELECT_SET , fstart , fstride , fcount , 
+                        fblock );
+
+    H5Dread( h5dst , type , mspace , fspace , H5P_DEFAULT , data );
+
+    H5Sclose( mspace );
+    H5Sclose( fspace );
+    H5Dclose( h5dst );
+    H5Gclose( h5grp );
+    H5Fclose( h5fil );
+}
