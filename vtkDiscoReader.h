@@ -7,6 +7,8 @@
 #define H5_USE_16_API
 #include <vtk_hdf5.h>
 
+enum Geom{CARTESIAN, CYLINDRICAL, SPHERICAL};
+
 class vtkDiscoReader : public vtkUnstructuredGridAlgorithm
 {
 public:
@@ -26,6 +28,7 @@ protected:
 
     char *FileName;
 private:
+    Geom geometry;
     int Nz;
     int Nr;
     std::vector<int> Np;
@@ -37,14 +40,34 @@ private:
     double phimax;
     std::vector<std::vector<int>> ncellspercell;
     int ncells;
-    void MakeGridHexahedron(vtkUnstructuredGrid *output);
+    int cellType;
+    void SetGeometry();
+    void MakeGrid(vtkUnstructuredGrid *output);
+    void LoadGrid();
+    void AddData(vtkUnstructuredGrid *output);
+    void AddDataScalar(vtkUnstructuredGrid *output, const char *name, int id);
+    void AddDataVector(vtkUnstructuredGrid *output, const char *name, int id0,
+                        int basis);
+    int AddDiscoCell(vtkUnstructuredGrid *output, 
+                                    vtkIdType sDLB, vtkIdType sDRB, 
+                                    vtkIdType sULB, vtkIdType sURB, 
+                                    vtkIdType sDLF, vtkIdType sDRF, 
+                                    vtkIdType sULF, vtkIdType sURF);
+    int AddFacesToStream(std::vector<vtkIdType> &faceStream,
+                                        vtkIdType sBL, vtkIdType sBR,
+                                        vtkIdType sFL, vtkIdType sFR);
     int which4(double, double, double, double);
     void readPatch(const char *group, const char *dset, void *data, 
-                                hid_t type, int dim, int *start, 
-                                int *loc_size, int *glo_size);
+                                hid_t type, int dim, hsize_t *start, 
+                                hsize_t *loc_size, hsize_t *glo_size);
     void readSimple(const char *group, const char *dset, void *data, 
                         hid_t type);
     void getH5dims(const char *group, const char *dset, hsize_t *dims);
+    void calcXYZ(double x1, double x2, double x3, double *xyz);
+    void calcVFromContravariant(double x1, double x2, double x3, double *V, 
+                                double *Vxyz);
+    void calcVFromOrthonormal(double x1, double x2, double x3, double *V, 
+                                double *Vxyz);
 };
 
 #endif
