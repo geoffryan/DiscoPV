@@ -28,8 +28,8 @@ vtkDiscoReader::vtkDiscoReader()
     this->SetNumberOfInputPorts(0);
     this->SetNumberOfOutputPorts(1);
     //this->cellType = VTK_HEXAHEDRON;
-    //this->cellType = VTK_POLYHEDRON;
-    this->cellType = VTK_TETRA;
+    this->cellType = VTK_POLYHEDRON;
+    //this->cellType = VTK_TETRA;
 }
 
 vtkDiscoReader::~vtkDiscoReader()
@@ -264,6 +264,8 @@ void vtkDiscoReader::MakeGrid(vtkUnstructuredGrid *output)
 
     if(this->cellType == VTK_TETRA)
         this->AddCellsTetrahedral(output, cellPoints);
+    else if(this->cellType == VTK_POLYHEDRON)
+        this->AddCellsPolyhedral(output, cellPoints);
     else
         this->AddCells(output, cellPoints);
     
@@ -618,6 +620,218 @@ void vtkDiscoReader::AddCellsTetrahedral(vtkUnstructuredGrid *output,
                 }
                 
                 this->ncellspercell[jk][i] = nadd;
+            }
+        }
+    }
+
+    int nc = output->GetNumberOfCells();
+    this->ncells = nc;
+}
+
+void vtkDiscoReader::AddCellsPolyhedral(vtkUnstructuredGrid *output,
+                        const std::vector<std::vector<vtkIdType>> &cellPoints)
+{
+    /*
+     * Rules for Cells to make a water-tight mesh:
+     *    -cells MUST have edges at neighbour's phi-boundaries.
+     *    -adjacent faces MUST be tesselated the same way.
+     */
+
+    int Nr = this->Nr;
+    int Nz = this->Nz;
+
+    int i,j,k,jk;
+
+    int ncellsTot = 0;
+    this->ncellspercell.reserve(Nz*Nr);
+
+    for(jk=0; jk<Nr*Nz; jk++)
+        this->ncellspercell.push_back(std::vector<int>(this->Np[jk]));
+
+    output->Allocate();
+
+    std::vector<vtkIdType> faceStream;
+
+    for(k=0; k<Nz; k++)
+    {
+        int kD = k-1;
+        int kU = k+1;
+
+        for(j=0; j<Nr; j++)
+        {
+            int jk = Nr*k + j;
+
+            int jL = j-1;
+            int jR = j+1;
+
+            int iL = 0;
+            int iR = 0;
+            int iD = 0;
+            int iU = 0;
+
+            int jkL = Nr*k + jL;
+            int jkR = Nr*k + jR;
+            int jkD = Nr*kD + j;
+            int jkU = Nr*kU + j;
+
+            double phiL, phiR, phiD, phiU;
+                
+            if(j>0)
+            {
+                while(this->pimh[jkL][iL] < this->pimh[jk][0])
+                    iL++;
+                phiL = this->pimh[jkL][iL];
+            }
+            else
+                phiL = HUGE;
+            if(j<Nr-1)
+            {
+                while(this->pimh[jkR][iR] < this->pimh[jk][0])
+                    iR++;
+                phiR = this->pimh[jkR][iR];
+            }
+            else
+                phiR = HUGE;
+            if(k>0)
+            {
+                while(this->pimh[jkD][iD] < this->pimh[jk][0])
+                    iD++;
+                phiD = this->pimh[jkD][iD];
+            }
+            else
+                phiD = HUGE;
+            if(k<Nz-1)
+            {
+                while(this->pimh[jkU][iU] < this->pimh[jk][0])
+                    iU++;
+                phiU = this->pimh[jkU][iU];
+            }
+            else
+                phiU = HUGE;
+
+            for(i=0; i<this->Np[jk]; i++)
+            {
+                vtkIdType sDLB = cellPoints[jk][4*i+0];
+                vtkIdType sDRB = cellPoints[jk][4*i+1];
+                vtkIdType sULB = cellPoints[jk][4*i+2];
+                vtkIdType sURB = cellPoints[jk][4*i+3];
+                vtkIdType sDLF = cellPoints[jk][4*(i+1)+0];
+                vtkIdType sDRF = cellPoints[jk][4*(i+1)+1];
+                vtkIdType sULF = cellPoints[jk][4*(i+1)+2];
+                vtkIdType sURF = cellPoints[jk][4*(i+1)+3];
+
+                int nf = 0;
+                faceStream.clear();
+                
+                faceStream.push_back(4);
+                faceStream.push_back(sDRB);
+                faceStream.push_back(sDLB);
+                faceStream.push_back(sULB);
+                faceStream.push_back(sURB);
+                faceStream.push_back(4);
+                faceStream.push_back(sDRF);
+                faceStream.push_back(sDLF);
+                faceStream.push_back(sULF);
+                faceStream.push_back(sURF);
+                nf += 2;
+
+                double phiF = this->pimh[jk][i+1];
+                vtkIdType sLa, sRa, sLb, sRb;
+
+                //Bottom Loop
+                sLa = sDLB;
+                sRa = sDRB;
+                
+                while(phiD < phiF)
+                {
+                    sLb = cellPoints[jkD][4*iD+2];
+                    sRb = cellPoints[jkD][4*iD+3];
+                    nf += this->AddFacesToStream(faceStream, 
+                                                    sLa, sRa, sLb, sRb);
+                    sLa = sLb;
+                    sRa = sRb;
+
+                    iD++;
+                    if(iD <= this->Np[jkD])
+                        phiD = this->pimh[jkD][iD];
+                    else
+                        phiD = HUGE;
+                }
+                sLb = sDLF;
+                sRb = sDRF;
+                nf += this->AddFacesToStream(faceStream, sLa, sRa, sLb, sRb);
+
+                //Top Loop
+                sLa = sULB;
+                sRa = sURB;
+                
+                while(phiU < phiF)
+                {
+                    sLb = cellPoints[jkU][4*iU+0];
+                    sRb = cellPoints[jkU][4*iU+1];
+                    nf += this->AddFacesToStream(faceStream, 
+                                                    sLa, sRa, sLb, sRb);
+                    sLa = sLb;
+                    sRa = sRb;
+
+                    iU++;
+                    if(iU <= this->Np[jkU])
+                        phiU = this->pimh[jkU][iU];
+                    else
+                        phiU = HUGE;
+                }
+                sLb = sULF;
+                sRb = sURF;
+                nf += this->AddFacesToStream(faceStream, sLa, sRa, sLb, sRb);
+               
+                // Radial Inner Loop
+                sLa = sULB;
+                sRa = sDLB;
+                
+                while(phiL < phiF)
+                {
+                    sLb = cellPoints[jkL][4*iL+3];
+                    sRb = cellPoints[jkL][4*iL+1];
+                    nf += this->AddFacesToStream(faceStream, 
+                                                    sLa, sRa, sLb, sRb);
+                    sLa = sLb;
+                    sRa = sRb;
+
+                    iL++;
+                    if(iL <= this->Np[jkL])
+                        phiL = this->pimh[jkL][iL];
+                    else
+                        phiL = HUGE;
+                }
+                sLb = sULF;
+                sRb = sDLF;
+                nf += this->AddFacesToStream(faceStream, sLa, sRa, sLb, sRb);
+                
+                //Outer Radial Loop
+                sLa = sURB;
+                sRa = sDRB;
+                
+                while(phiR < phiF)
+                {
+                    sLb = cellPoints[jkR][4*iR+2];
+                    sRb = cellPoints[jkR][4*iR+0];
+                    nf += this->AddFacesToStream(faceStream, 
+                                                    sLa, sRa, sLb, sRb);
+                    sLa = sLb;
+                    sRa = sRb;
+
+                    iR++;
+                    if(iR <= this->Np[jkR])
+                        phiR = this->pimh[jkR][iR];
+                    else
+                        phiR = HUGE;
+                }
+                sLb = sURF;
+                sRb = sDRF;
+                nf += this->AddFacesToStream(faceStream, sLa, sRa, sLb, sRb);
+
+                output->InsertNextCell(VTK_POLYHEDRON, nf, faceStream.data());
+                this->ncellspercell[jk][i] = 1;
             }
         }
     }

@@ -48,6 +48,8 @@ private:
                         const std::vector<std::vector<vtkIdType>> &cellPoints);
     void AddCellsTetrahedral(vtkUnstructuredGrid *output,
                         const std::vector<std::vector<vtkIdType>> &cellPoints);
+    void AddCellsPolyhedral(vtkUnstructuredGrid *output,
+                        const std::vector<std::vector<vtkIdType>> &cellPoints);
     void AddData(vtkUnstructuredGrid *output);
     void AddDataScalar(vtkUnstructuredGrid *output, const char *name, int id);
     void AddDataVector(vtkUnstructuredGrid *output, const char *name, int id0,
