@@ -27,8 +27,9 @@ vtkDiscoReader::vtkDiscoReader()
     this->FileName = NULL;
     this->SetNumberOfInputPorts(0);
     this->SetNumberOfOutputPorts(1);
-    this->cellType = VTK_HEXAHEDRON;
+    //this->cellType = VTK_HEXAHEDRON;
     //this->cellType = VTK_POLYHEDRON;
+    this->cellType = VTK_TETRA;
 }
 
 vtkDiscoReader::~vtkDiscoReader()
@@ -204,25 +205,26 @@ void vtkDiscoReader::MakeGrid(vtkUnstructuredGrid *output)
             {
                 vtkIdType s = indexPoints[k][j] + i;
 
-                int jkmin, *imin, opp;
+                int jkmin, opp;
+                int *imin;
                 double *phimin;
 
-                int which4 = this->which4(phiDL, phiDR, phiUL, phiUR);
-                if(which4 == 0)
+                int w4 = this->which4(phiDL, phiDR, phiUL, phiUR);
+                if(w4 == 0)
                 {
                     imin = &iDL;
                     jkmin = jkDL;
                     phimin = &phiDL;
                     opp = 3;
                 }
-                else if(which4 == 1)
+                else if(w4 == 1)
                 {
                     imin = &iDR;
                     jkmin = jkDR;
                     phimin = &phiDR;
                     opp = 2;
                 }
-                else if(which4 == 2)
+                else if(w4 == 2)
                 {
                     imin = &iUL;
                     jkmin = jkUL;
@@ -260,14 +262,47 @@ void vtkDiscoReader::MakeGrid(vtkUnstructuredGrid *output)
     myfile << "Made Points\n";
     myfile.close();
 
+    if(this->cellType == VTK_TETRA)
+        this->AddCellsTetrahedral(output, cellPoints);
+    else
+        this->AddCells(output, cellPoints);
+    
+    myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
+                    std::ios_base::app);
+    myfile << "Added cells: " << this->ncells << "\n";
+    myfile.close();
+    
+    myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
+                    std::ios_base::app);
+    myfile << "Made Cells\n";
+    myfile.close();
+}
+
+void vtkDiscoReader::AddCells(vtkUnstructuredGrid *output,
+                        const std::vector<std::vector<vtkIdType>> &cellPoints)
+{
+    /*
+     * Rules for Cells to make a water-tight mesh:
+     *    -cells MUST have edges at neighbour's phi-boundaries.
+     *    -adjacent faces MUST be tesselated the same way.
+     */
+
+    int Nr = this->Nr;
+    int Nz = this->Nz;
+
+    int i,j,k,jk;
+
     int ncellsTot = 0;
     this->ncellspercell.reserve(Nz*Nr);
+
     for(jk=0; jk<Nr*Nz; jk++)
         this->ncellspercell.push_back(std::vector<int>(this->Np[jk]));
 
     output->Allocate();
 
+
     for(k=0; k<Nz; k++)
+    {
         for(j=0; j<Nr; j++)
         {
             int jk = Nr*k + j;
@@ -283,25 +318,312 @@ void vtkDiscoReader::MakeGrid(vtkUnstructuredGrid *output)
                 vtkIdType sULF = cellPoints[jk][4*(i+1)+2];
                 vtkIdType sURF = cellPoints[jk][4*(i+1)+3];
 
-                int nadd = this->AddDiscoCell(output, 
+                int nadd = 0;
+                nadd += this->AddDiscoCell(output, 
                                                 sDLB, sDRB, sULB, sURB,
                                                 sDLF, sDRF, sULF, sURF);
                 this->ncellspercell[jk][i] = nadd;
             }
         }
+    }
 
     int nc = output->GetNumberOfCells();
     this->ncells = nc;
-    
-    myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
-                    std::ios_base::app);
-    myfile << "Added cells: " << nc << "\n";
-    myfile.close();
-    
-    myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
-                    std::ios_base::app);
-    myfile << "Made Cells\n";
-    myfile.close();
+}
+
+void vtkDiscoReader::AddCellsTetrahedral(vtkUnstructuredGrid *output,
+                        const std::vector<std::vector<vtkIdType>> &cellPoints)
+{
+    /*
+     * Rules for Cells to make a water-tight mesh:
+     *    -cells MUST have edges at neighbour's phi-boundaries.
+     *    -adjacent faces MUST be tesselated the same way.
+     */
+
+    int Nr = this->Nr;
+    int Nz = this->Nz;
+
+    int i,j,k,jk;
+
+    int ncellsTot = 0;
+    this->ncellspercell.reserve(Nz*Nr);
+
+    for(jk=0; jk<Nr*Nz; jk++)
+        this->ncellspercell.push_back(std::vector<int>(this->Np[jk]));
+
+    output->Allocate();
+
+
+    for(k=0; k<Nz; k++)
+    {
+        int kD = k-1;
+        int kU = k+1;
+
+        for(j=0; j<Nr; j++)
+        {
+            int jk = Nr*k + j;
+
+            int jL = j-1;
+            int jR = j+1;
+
+            int iL = 0;
+            int iR = 0;
+            int iD = 0;
+            int iU = 0;
+
+            int jkL = Nr*k + jL;
+            int jkR = Nr*k + jR;
+            int jkD = Nr*kD + j;
+            int jkU = Nr*kU + j;
+
+            double phiL, phiR, phiD, phiU;
+                
+            if(j>0)
+            {
+                while(this->pimh[jkL][iL] < this->pimh[jk][0])
+                    iL++;
+                phiL = this->pimh[jkL][iL];
+            }
+            else
+                phiL = HUGE;
+            if(j<Nr-1)
+            {
+                while(this->pimh[jkR][iR] < this->pimh[jk][0])
+                    iR++;
+                phiR = this->pimh[jkR][iR];
+            }
+            else
+                phiR = HUGE;
+            if(k>0)
+            {
+                while(this->pimh[jkD][iD] < this->pimh[jk][0])
+                    iD++;
+                phiD = this->pimh[jkD][iD];
+            }
+            else
+                phiD = HUGE;
+            if(k<Nz-1)
+            {
+                while(this->pimh[jkU][iU] < this->pimh[jk][0])
+                    iU++;
+                phiU = this->pimh[jkU][iU];
+            }
+            else
+                phiU = HUGE;
+
+            for(i=0; i<this->Np[jk]; i++)
+            {
+                vtkIdType sDLB = cellPoints[jk][4*i+0];
+                vtkIdType sDRB = cellPoints[jk][4*i+1];
+                vtkIdType sULB = cellPoints[jk][4*i+2];
+                vtkIdType sURB = cellPoints[jk][4*i+3];
+                vtkIdType sDLF = cellPoints[jk][4*(i+1)+0];
+                vtkIdType sDRF = cellPoints[jk][4*(i+1)+1];
+                vtkIdType sULF = cellPoints[jk][4*(i+1)+2];
+                vtkIdType sURF = cellPoints[jk][4*(i+1)+3];
+
+                int nadd = 0;
+
+                double phiF = this->pimh[jk][i+1];
+                vtkIdType s0b, s1b, s2b;
+                vtkIdType p[4];
+
+                //Bottom-left Loop
+                
+                p[0] = sDRB;
+                p[1] = sDLB;
+                p[2] = sULB;
+                
+                while(phiL < phiF || phiD < phiF)
+                {
+                    s0b = phiD<phiF ? cellPoints[jkD][4*iD+3] : sDRF;
+                    s2b = phiL<phiF ? cellPoints[jkL][4*iL+3] : sULF;
+                    if(phiL < phiD)
+                        s1b = phiL<phiF ? cellPoints[jkL][4*iL+1] : sDLF;
+                    else
+                        s1b = phiD<phiF ? cellPoints[jkD][4*iD+2] : sDLF;
+
+                    while(p[0] < s0b || p[1] < s1b || p[2] < s2b)
+                    {
+                        //Add L/D points before R/U.
+                        //DL
+                        if(p[1] < s1b)
+                        {
+                            p[3] = p[1]+1;
+                            output->InsertNextCell(VTK_TETRA, 4, p);
+                            nadd++;
+                            p[1]++;
+                        }
+                        //DR
+                        if(p[0] < s0b)
+                        {
+                            p[3] = p[0]+1;
+                            output->InsertNextCell(VTK_TETRA, 4, p);
+                            nadd++;
+                            p[0]++;
+                        }
+                        //UL
+                        if(p[2] < s2b)
+                        {
+                            p[3] = p[2]+1;
+                            output->InsertNextCell(VTK_TETRA, 4, p);
+                            nadd++;
+                            p[2]++;
+                        }
+                    }
+
+                    if(phiL < phiD)
+                    {
+                        iL++;
+                        if(iL <= this->Np[jkL])
+                            phiL = this->pimh[jkL][iL];
+                        else
+                            phiL = HUGE;
+                    }
+                    else
+                    {
+                        iD++;
+                        if(iD <= this->Np[jkD])
+                            phiD = this->pimh[jkD][iD];
+                        else
+                            phiD = HUGE;
+                    }
+                }
+                s0b = sDRF;
+                s1b = sDLF;
+                s2b = sULF;
+
+                while(p[0] < s0b || p[1] < s1b || p[2] < s2b)
+                {
+                    //Add L/D points before R/U.
+                    //DL
+                    if(p[1] < s1b)
+                    {
+                        p[3] = p[1]+1;
+                        output->InsertNextCell(VTK_TETRA, 4, p);
+                        nadd++;
+                        p[1]++;
+                    }
+                    //DR
+                    if(p[0] < s0b)
+                    {
+                        p[3] = p[0]+1;
+                        output->InsertNextCell(VTK_TETRA, 4, p);
+                        nadd++;
+                        p[0]++;
+                    }
+                    //UL
+                    if(p[2] < s2b)
+                    {
+                        p[3] = p[2]+1;
+                        output->InsertNextCell(VTK_TETRA, 4, p);
+                        nadd++;
+                        p[2]++;
+                    }
+                }
+
+                //Upper-right Loop
+
+                p[0] = sULB;
+                p[1] = sURB;
+                p[2] = sDRB;
+                
+                while(phiR < phiF || phiU < phiF)
+                {
+                    s0b = phiU<phiF ? cellPoints[jkU][4*iU+0] : sULF;
+                    s2b = phiR<phiF ? cellPoints[jkR][4*iR+0] : sDRF;
+                    if(phiR < phiU)
+                        s1b = phiR<phiF ? cellPoints[jkR][4*iR+2] : sURF;
+                    else
+                        s1b = phiU<phiF ? cellPoints[jkU][4*iU+1] : sURF;
+
+                    while(p[0] < s0b || p[1] < s1b || p[2] < s2b)
+                    {
+                        //Add L/D points before R/U.
+                        //UL
+                        if(p[0] < s0b)
+                        {
+                            p[3] = p[0]+1;
+                            output->InsertNextCell(VTK_TETRA, 4, p);
+                            nadd++;
+                            p[0] = p[3];
+                        }
+                        //DR
+                        if(p[2] < s2b)
+                        {
+                            p[3] = p[2]+1;
+                            output->InsertNextCell(VTK_TETRA, 4, p);
+                            nadd++;
+                            p[2] = p[3];
+                        }
+                        //UR
+                        if(p[1] < s1b)
+                        {
+                            p[3] = p[1]+1;
+                            output->InsertNextCell(VTK_TETRA, 4, p);
+                            nadd++;
+                            p[1] = p[3];
+                        }
+                    }
+
+                    if(phiR < phiF)
+                    {
+                        iR++;
+                        if(iR <= this->Np[jkR])
+                            phiR = this->pimh[jkR][iR];
+                        else
+                            phiR = HUGE;
+                    }
+                    else
+                    {
+                        iU++;
+                        if(iU <= this->Np[jkU])
+                            phiU = this->pimh[jkU][iU];
+                        else
+                            phiU = HUGE;
+                    }
+                }
+
+                s0b = sULF;
+                s1b = sURF;
+                s2b = sDRF;
+
+                while(p[0] < s0b || p[1] < s1b || p[2] < s2b)
+                {
+                    //Add L/D points before R/U.
+                    //UL
+                    if(p[0] < s0b)
+                    {
+                        p[3] = p[0]+1;
+                        output->InsertNextCell(VTK_TETRA, 4, p);
+                        nadd++;
+                        p[0] = p[3];
+                    }
+                    //DR
+                    if(p[2] < s2b)
+                    {
+                        p[3] = p[2]+1;
+                        output->InsertNextCell(VTK_TETRA, 4, p);
+                        nadd++;
+                        p[2] = p[3];
+                    }
+                    //UR
+                    if(p[1] < s1b)
+                    {
+                        p[3] = p[1]+1;
+                        output->InsertNextCell(VTK_TETRA, 4, p);
+                        nadd++;
+                        p[1] = p[3];
+                    }
+                }
+                
+                this->ncellspercell[jk][i] = nadd;
+            }
+        }
+    }
+
+    int nc = output->GetNumberOfCells();
+    this->ncells = nc;
 }
 
 void vtkDiscoReader::LoadGrid()
@@ -680,7 +1002,7 @@ int vtkDiscoReader::which4(double x0, double x1, double x2, double x3)
     if(x2 < x3)
     {
         i23 = 2;
-        x23 = x3;
+        x23 = x2;
     }
     else
     {
@@ -693,6 +1015,97 @@ int vtkDiscoReader::which4(double x0, double x1, double x2, double x3)
     else
         return i23;
 }
+
+void vtkDiscoReader::order4(double x0, double x1, double x2, double x3,
+                            int *i0, int *i1, int *i2, int *i3)
+{
+    int lo0, lo1, lo2, lo3;
+    int lo01, lo23, mida, midb;
+    int hi01, hi23, hia, hib;
+    double xlo01, xlo23, xmida, xmidb;
+    double xhi01, xhi23, xhia, xhib;
+
+    if(x0 < x1)
+    {
+        lo01 = 0;
+        xlo01 = x0;
+        hi01 = 1;
+        xhi01 = x1;
+    }
+    else
+    {
+        lo01 = 1;
+        xlo01 = x1;
+        hi01 = 0;
+        xhi01 = x0;
+    }
+
+    if(x2 < x3)
+    {
+        lo23 = 2;
+        xlo23 = x2;
+        hi23 = 3;
+        xhi23 = x3;
+    }
+    else
+    {
+        lo23 = 3;
+        xlo23 = x3;
+        hi23 = 2;
+        xhi23 = x2;
+    }
+
+    if(xlo01 < xlo23)
+    {
+        lo0 = lo01;
+        mida = lo23;
+        xmida = xlo23;
+        midb = hi01;
+        xmidb = xhi01;
+        hia = hi23;
+        xhia = xhi23;
+    }
+    else
+    {
+        lo0 = lo23;
+        mida = lo01;
+        xmida = xlo01;
+        midb = hi23;
+        xmidb = xhi23;
+        hia = hi01;
+        xhia = xhi01;
+    }
+
+    if(xmida < xmidb)
+    {
+        lo1 = mida;
+        hib = midb;
+        xhib = xmidb;
+    }
+    else
+    {
+        lo1 = midb;
+        hib = mida;
+        xhib = xmida;
+    }
+
+    if(xhia < xhib)
+    {
+        lo2 = hia;
+        lo3 = hib;
+    }
+    else
+    {
+        lo2 = hib;
+        lo3 = hia;
+    }
+
+    *i0 = lo0;
+    *i1 = lo1;
+    *i2 = lo2;
+    *i3 = lo3;
+}
+
 
 
 void vtkDiscoReader::getH5dims(const char *group, const char *dset, 

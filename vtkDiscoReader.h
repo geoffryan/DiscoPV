@@ -44,6 +44,10 @@ private:
     void SetGeometry();
     void MakeGrid(vtkUnstructuredGrid *output);
     void LoadGrid();
+    void AddCells(vtkUnstructuredGrid *output,
+                        const std::vector<std::vector<vtkIdType>> &cellPoints);
+    void AddCellsTetrahedral(vtkUnstructuredGrid *output,
+                        const std::vector<std::vector<vtkIdType>> &cellPoints);
     void AddData(vtkUnstructuredGrid *output);
     void AddDataScalar(vtkUnstructuredGrid *output, const char *name, int id);
     void AddDataVector(vtkUnstructuredGrid *output, const char *name, int id0,
@@ -57,6 +61,8 @@ private:
                                         vtkIdType sBL, vtkIdType sBR,
                                         vtkIdType sFL, vtkIdType sFR);
     int which4(double, double, double, double);
+    void order4(double x0, double x1, double x2, double x3,
+                            int *i0, int *i1, int *i2, int *i3);
     void readPatch(const char *group, const char *dset, void *data, 
                                 hid_t type, int dim, hsize_t *start, 
                                 hsize_t *loc_size, hsize_t *glo_size);
