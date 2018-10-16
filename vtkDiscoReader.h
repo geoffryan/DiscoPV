@@ -18,6 +18,8 @@ public:
     int CanReadFile(const char *fname);
     vtkSetStringMacro(FileName);
     vtkGetStringMacro(FileName);
+    void SetMeshType(int type);
+    int GetMeshType();
 protected:
     vtkDiscoReader();
     ~vtkDiscoReader();

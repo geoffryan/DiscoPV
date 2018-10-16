@@ -27,9 +27,7 @@ vtkDiscoReader::vtkDiscoReader()
     this->FileName = NULL;
     this->SetNumberOfInputPorts(0);
     this->SetNumberOfOutputPorts(1);
-    //this->cellType = VTK_HEXAHEDRON;
-    this->cellType = VTK_POLYHEDRON;
-    //this->cellType = VTK_TETRA;
+    this->cellType = VTK_TETRA;
 }
 
 vtkDiscoReader::~vtkDiscoReader()
@@ -45,6 +43,31 @@ vtkDiscoReader::~vtkDiscoReader()
 int vtkDiscoReader::CanReadFile(const char *fname)
 {
     return 1;
+}
+
+void vtkDiscoReader::SetMeshType(int type)
+{
+    if(type == 0)
+        this->cellType = VTK_TETRA;
+    else if(type == 1)
+        this->cellType = VTK_POLYHEDRON;
+    else if(type == 2)
+        this->cellType = VTK_HEXAHEDRON;
+    else
+        this->cellType = VTK_TETRA;
+    this->Modified();
+}
+
+int vtkDiscoReader::GetMeshType()
+{
+    if(this->cellType == VTK_TETRA)
+        return 0;
+    else if(this->cellType == VTK_POLYHEDRON)
+        return 1;
+    else if(this->cellType == VTK_HEXAHEDRON)
+        return 2;
+    else
+        return -1;
 }
 
 void vtkDiscoReader::SetGeometry()
@@ -1406,7 +1429,7 @@ void vtkDiscoReader::calcXYZ(double x1, double x2, double x3, double *xyz)
     {
         xyz[0] = x1*sin(x3)*cos(x2);
         xyz[1] = x1*sin(x3)*sin(x2);
-        xyz[2] = x1*cos(x2);
+        xyz[2] = x1*cos(x3);
     }
     else
     {
