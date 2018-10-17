@@ -101,6 +101,8 @@ int vtkDiscoReader::RequestInformation(vtkInformation*, vtkInformationVector**,
 
     vtkInformation *outInfo = outVec->GetInformationObject(0);
 
+    outInfo->Set(CAN_HANDLE_PIECE_REQUEST(), 1);
+
     return 1;
 }
 
@@ -117,7 +119,15 @@ int vtkDiscoReader::RequestData(vtkInformation*, vtkInformationVector**,
     vtkUnstructuredGrid *outData = vtkUnstructuredGrid::SafeDownCast
                                 (outInfo->Get(vtkDataObject::DATA_OBJECT()));
 
+    int piece = outInfo->Get(
+                    vtkStreamingDemandDrivenPipeline::UPDATE_PIECE_NUMBER());
+    int numPieces = outInfo->Get(
+                vtkStreamingDemandDrivenPipeline::UPDATE_NUMBER_OF_PIECES());
+    int ghostLevel = outInfo->Get(
+            vtkStreamingDemandDrivenPipeline::UPDATE_NUMBER_OF_GHOST_LEVELS());
+
     this->SetGeometry();
+    this->LoadGridDims(piece, numPieces, ghostLevel);
     this->MakeGrid(outData);
     this->AddData(outData);
 
@@ -126,6 +136,60 @@ int vtkDiscoReader::RequestData(vtkInformation*, vtkInformationVector**,
     myfile.close();
     
     return 1;
+}
+    
+void vtkDiscoReader::LoadGridDims(int piece, int numPieces, int ghostLevel)
+{
+    hsize_t hdims[1];
+    getH5dims("Grid", "r_jph", hdims);
+    this->NrTot = hdims[0] - 1;
+    getH5dims("Grid", "z_kph", hdims);
+    this->NzTot = hdims[0] - 1;
+
+    if(numPieces > this->NrTot * this->NzTot)
+        numPieces = this->NrTot * this->NzTot;
+
+    int dims[2], rank[2];
+    this->dimsCreate(numPieces, dims);
+    rank[0] = piece % dims[0];
+    rank[1] = piece / dims[0];
+
+    ofstream myfile;
+    myfile.open("/Users/geoff/Projects/DiscoPV/data.txt");
+    myfile << "Piece "<<piece<<" Dims: " << dims[0] << " x " << dims[1] << "\n";
+    myfile << "Piece "<<piece<<" Rank: " << rank[0] << " x " << rank[1] << "\n";
+    myfile.close();
+
+    this->jA = (rank[0]*this->NrTot)/dims[0];
+    this->jB = ((rank[0]+1)*this->NrTot)/dims[0];
+    if(rank[0] == dims[0]-1)
+        this->jB = this->NrTot;
+    
+    this->kA = (rank[1]*this->NzTot)/dims[1];
+    this->kB = ((rank[1]+1)*this->NzTot)/dims[1];
+    if(rank[1] == dims[1]-1)
+        this->kB = this->NzTot;
+
+    this->jA = std::max(this->jA - (ghostLevel+1), 0);
+    this->jB = std::min(this->jB + (ghostLevel+1), this->NrTot);
+    this->kA = std::max(this->kA - (ghostLevel+1), 0);
+    this->kB = std::min(this->kB + (ghostLevel+1), this->NzTot);
+
+    if(piece >= numPieces)
+    {
+        this->jA = -1;
+        this->jB = -1;
+        this->kA = -1;
+        this->kB = -1;
+    }
+
+    this->Nr = this->jB - this->jA;
+    this->Nz = this->kB - this->kA;
+
+    this->cja = this->jA==0 ? 0 : 1;
+    this->cjb = this->jB==this->NrTot ? Nr : Nr-1;
+    this->cka = this->kA==0 ? 0 : 1;
+    this->ckb = this->kB==this->NzTot ? Nz : Nz-1;
 }
 
 void vtkDiscoReader::MakeGrid(vtkUnstructuredGrid *output)
@@ -149,11 +213,16 @@ void vtkDiscoReader::MakeGrid(vtkUnstructuredGrid *output)
 
     int i, j, k, jk;
 
-    for(jk=0; jk<Nr*Nz; jk++)
-            cellPoints.push_back(std::vector<vtkIdType>(4*(this->Np[jk]+1)));
+    int pkA = this->kA==0 ? 0 : 1;
+    int pkB = this->kB==this->NzTot ? Nz : Nz-1;
+    int pjA = this->jA==0 ? 0 : 1;
+    int pjB = this->jB==this->NrTot ? Nr : Nr-1;
 
-    for(k=0; k<=Nz; k++)
-        for(j=0; j<=Nr; j++)
+    for(jk=0; jk<Nr*Nz; jk++)
+        cellPoints.push_back(std::vector<vtkIdType>(4*(this->Np[jk]+1)));
+
+    for(k=this->cka; k<=this->ckb; k++)
+        for(j=this->cja; j<=this->cjb; j++)
         {
             int jkDL = Nr*(k-1) + (j-1);
             int jkDR = Nr*(k-1) + j;
@@ -181,14 +250,14 @@ void vtkDiscoReader::MakeGrid(vtkUnstructuredGrid *output)
     myfile << "Counted Points: " << npointsTot << "\n";
     myfile.close();
 
-    for(k=0; k<=Nz; k++)
+    for(k=this->cka; k<=this->ckb; k++)
     {
         double z = this->zkmh[k];
 
         int kD = k-1;
         int kU = k;
 
-        for(j=0; j<=Nr; j++)
+        for(j=this->cja; j<=this->cjb; j++)
         {
             int iDL = 0;
             int iDR = 0;
@@ -310,6 +379,8 @@ void vtkDiscoReader::AddCells(vtkUnstructuredGrid *output,
      * Rules for Cells to make a water-tight mesh:
      *    -cells MUST have edges at neighbour's phi-boundaries.
      *    -adjacent faces MUST be tesselated the same way.
+     *
+     *    This mesh does not follow these rules.
      */
 
     int Nr = this->Nr;
@@ -325,10 +396,9 @@ void vtkDiscoReader::AddCells(vtkUnstructuredGrid *output,
 
     output->Allocate();
 
-
-    for(k=0; k<Nz; k++)
+    for(k=this->cka; k<this->ckb; k++)
     {
-        for(j=0; j<Nr; j++)
+        for(j=this->cja; j<this->cjb; j++)
         {
             int jk = Nr*k + j;
 
@@ -379,12 +449,12 @@ void vtkDiscoReader::AddCellsTetrahedral(vtkUnstructuredGrid *output,
     output->Allocate();
 
 
-    for(k=0; k<Nz; k++)
+    for(k=this->cka; k<this->ckb; k++)
     {
         int kD = k-1;
         int kU = k+1;
 
-        for(j=0; j<Nr; j++)
+        for(j=this->cja; j<this->cjb; j++)
         {
             int jk = Nr*k + j;
 
@@ -675,12 +745,12 @@ void vtkDiscoReader::AddCellsPolyhedral(vtkUnstructuredGrid *output,
 
     std::vector<vtkIdType> faceStream;
 
-    for(k=0; k<Nz; k++)
+    for(k=this->cka; k<this->ckb; k++)
     {
         int kD = k-1;
         int kU = k+1;
 
-        for(j=0; j<Nr; j++)
+        for(j=this->cja; j<this->cjb; j++)
         {
             int jk = Nr*k + j;
 
@@ -865,14 +935,8 @@ void vtkDiscoReader::AddCellsPolyhedral(vtkUnstructuredGrid *output,
 
 void vtkDiscoReader::LoadGrid()
 {
-    hsize_t dims[2];
-    getH5dims("Grid", "r_jph", dims);
-    int Nr = dims[0] - 1;
-    getH5dims("Grid", "z_kph", dims);
-    int Nz = dims[0] - 1;
-
-    this->Nz = Nz;
-    this->Nr = Nr;
+    int Nr = this->Nr;
+    int Nz = this->Nz;
 
     this->rjmh.reserve(Nr+1);
     this->zkmh.reserve(Nz+1);
@@ -880,11 +944,33 @@ void vtkDiscoReader::LoadGrid()
     this->Index.reserve(Nz*Nr);
     this->Id_phi0.reserve(Nz*Nr);
 
-    readSimple("Grid", "r_jph", this->rjmh.data(), H5T_NATIVE_DOUBLE);
-    readSimple("Grid", "z_kph", this->zkmh.data(), H5T_NATIVE_DOUBLE);
-    readSimple("Grid", "Np", this->Np.data(), H5T_NATIVE_INT);
-    readSimple("Grid", "Index", this->Index.data(), H5T_NATIVE_INT);
-    readSimple("Grid", "Id_phi0", this->Id_phi0.data(), H5T_NATIVE_INT);
+    hsize_t start[2] = {0,0};
+    hsize_t loc_size[2] = {0,0};
+    hsize_t glo_size[2] = {0,0};
+
+    start[0] = this->jA;
+    loc_size[0] = this->Nr+1;
+    glo_size[0] = this->NrTot+1;
+    readPatch("Grid", "r_jph", this->rjmh.data(), H5T_NATIVE_DOUBLE,
+                1, start, loc_size, glo_size);
+    start[0] = this->kA;
+    loc_size[0] = this->Nz+1;
+    glo_size[0] = this->NzTot+1;
+    readPatch("Grid", "z_kph", this->zkmh.data(), H5T_NATIVE_DOUBLE,
+                1, start, loc_size, glo_size);
+
+    start[0] = this->kA;
+    start[1] = this->jA;
+    loc_size[0] = this->Nz;
+    loc_size[1] = this->Nr;
+    glo_size[0] = this->NzTot;
+    glo_size[1] = this->NrTot;
+    readPatch("Grid", "Np", this->Np.data(), H5T_NATIVE_INT,
+                2, start, loc_size, glo_size);
+    readPatch("Grid", "Index", this->Index.data(), H5T_NATIVE_INT,
+                2, start, loc_size, glo_size);
+    readPatch("Grid", "Id_phi0", this->Id_phi0.data(), H5T_NATIVE_INT,
+                2, start, loc_size, glo_size);
 
     double phimax;
     readSimple("Pars", "Phi_Max", &phimax, H5T_NATIVE_DOUBLE);
@@ -896,34 +982,38 @@ void vtkDiscoReader::LoadGrid()
     for(jk=0; jk<Nr*Nz; jk++)
         this->pimh.push_back(std::vector<double>(this->Np[jk]+1));
 
+    hsize_t dims[2];
     this->getH5dims("Data", "Cells", dims);
 
+    start[0] = 0;
+    start[1] = dims[1]-1;
+    loc_size[0] = 0;
+    loc_size[1] = 1;
+    glo_size[0] = dims[0];
+    glo_size[1] = dims[1];
     std::vector<double> buf;
-    buf.reserve(dims[0]);
-
-    hsize_t start[2] = {0, dims[1]-1};
-    hsize_t loc_size[2] = {dims[0], 1};
-    hsize_t glo_size[2] = {dims[0], dims[1]};
-
-    this->readPatch("Data", "Cells", buf.data(), H5T_NATIVE_DOUBLE, 2, start, 
-                    loc_size, glo_size);
 
     for(jk=0; jk<Nr*Nz; jk++)
     {
-        int sa, sb, s0, i0, ib;
-        sa = this->Index[jk];
-        sb = this->Index[jk] + this->Np[jk];
-        s0 = this->Id_phi0[jk];
-        i0 = sb-s0;
-        ib = this->Np[jk];
+        int sa = this->Index[jk];
+        int s0 = this->Id_phi0[jk];
+        int i0 = s0-sa;
+        int n = this->Np[jk];
 
-        for(i=0; i<i0; i++)
-            this->pimh[jk][i+1] = buf[s0 + i];
+        start[0] = sa;
+        loc_size[0] = n;
+        buf.reserve(n);
 
-        for(i=i0; i<ib; i++)
-            this->pimh[jk][i+1] = buf[sa + i-i0];
+        this->readPatch("Data", "Cells", buf.data(), H5T_NATIVE_DOUBLE, 
+                            2, start, loc_size, glo_size);
 
-        this->pimh[jk][0] = this->pimh[jk][ib] - phimax;
+        for(i=0; i<n-i0; i++)
+            this->pimh[jk][i+1] = buf[i0 + i];
+
+        for(i=n-i0; i<n; i++)
+            this->pimh[jk][i+1] = buf[i - (n-i0)];
+
+        this->pimh[jk][0] = this->pimh[jk][n] - phimax;
     }
 }
 
@@ -994,45 +1084,48 @@ void vtkDiscoReader::AddDataScalar(vtkUnstructuredGrid *output,
     this->getH5dims("Data", "Cells", dims);
 
     std::vector<double> buf;
-    buf.reserve(dims[0]);
 
     hsize_t start[2] = {0, (hsize_t)id};
-    hsize_t loc_size[2] = {dims[0], 1};
+    hsize_t loc_size[2] = {0, 1};
     hsize_t glo_size[2] = {dims[0], dims[1]};
-
-    this->readPatch("Data", "Cells", buf.data(), H5T_NATIVE_DOUBLE, 2, start, 
-                    loc_size, glo_size);
 
     vtkDoubleArray *q = vtkDoubleArray::New();
     q->SetName(name);
     q->SetNumberOfValues(this->ncells);
 
-    int i, jk, s, c;
+    int i, j, k, s, c;
 
     s = 0;
-    for(jk=0; jk<Nr*Nz; jk++)
-    {
-        int sa, sb, s0, i0, ib;
-        sa = this->Index[jk];
-        sb = this->Index[jk] + this->Np[jk];
-        s0 = this->Id_phi0[jk];
-        i0 = sb-s0;
-        ib = this->Np[jk];
-
-        for(i=0; i<this->Np[jk]; i++)
+    for(k=this->cka; k<this->ckb; k++)
+        for(j=this->cja; j<this->cjb; j++)
         {
-            double val;
-            if(i < i0)
-                val = buf[s0+i];
-            else 
-                val = buf[sa+i-i0];
-            for(c=0; c<this->ncellspercell[jk][i]; c++)
+            int jk = k * this->Nr + j;
+
+            int sa = this->Index[jk];
+            int s0 = this->Id_phi0[jk];
+            int i0 = s0-sa;
+            int n = this->Np[jk];
+
+            start[0] = sa;
+            loc_size[0] = n;
+            buf.reserve(n);
+            this->readPatch("Data", "Cells", buf.data(), H5T_NATIVE_DOUBLE, 
+                                2, start, loc_size, glo_size);
+
+            for(i=0; i<n; i++)
             {
-                q->SetValue(s, val);
-                s++;
+                double val;
+                if(i < n-i0)
+                    val = buf[i0+i];
+                else 
+                    val = buf[i-(n-i0)];
+                for(c=0; c<this->ncellspercell[jk][i]; c++)
+                {
+                    q->SetValue(s, val);
+                    s++;
+                }
             }
         }
-    }
     output->GetCellData()->AddArray(q);
     q->Delete();
 }
@@ -1045,14 +1138,11 @@ void vtkDiscoReader::AddDataVector(vtkUnstructuredGrid *output,
     this->getH5dims("Data", "Cells", dims);
 
     std::vector<double> buf;
-    buf.reserve(dims[0]*3);
 
     hsize_t start[2] = {0, (hsize_t)id0};
-    hsize_t loc_size[2] = {dims[0], 3};
+    hsize_t loc_size[2] = {0, 3};
     hsize_t glo_size[2] = {dims[0], dims[1]};
 
-    this->readPatch("Data", "Cells", buf.data(), H5T_NATIVE_DOUBLE, 2, start, 
-                    loc_size, glo_size);
 
     vtkDoubleArray *q = vtkDoubleArray::New();
     q->SetName(name);
@@ -1061,33 +1151,37 @@ void vtkDiscoReader::AddDataVector(vtkUnstructuredGrid *output,
 
     int i, j, k, s, c;
     int Nr = this->Nr;
-    int Nz = this->Nz;
-    double *buf0 = buf.data();
 
     s = 0;
-    for(k=0; k<Nz; k++)
+    for(k=this->cka; k<this->ckb; k++)
     {
         double z = 0.5*(this->zkmh[k] + this->zkmh[k+1]);
 
-        for(j=0; j<Nr; j++)
+        for(j=this->cja; j<this->cjb; j++)
         {
             int jk = Nr*k + j;
-            int sa, sb, s0, i0, ib;
-            sa = this->Index[jk];
-            sb = this->Index[jk] + this->Np[jk];
-            s0 = this->Id_phi0[jk];
-            i0 = sb-s0;
-            ib = this->Np[jk];
+
+            int sa = this->Index[jk];
+            int s0 = this->Id_phi0[jk];
+            int i0 = s0-sa;
+            int n = this->Np[jk];
 
             double r = 0.5*(this->rjmh[j] + this->rjmh[j+1]);
 
-            for(i=0; i<this->Np[jk]; i++)
+            start[0] = sa;
+            loc_size[0] = n;
+            buf.reserve(3*n);
+            this->readPatch("Data", "Cells", buf.data(), H5T_NATIVE_DOUBLE, 
+                                2, start, loc_size, glo_size);
+            double *buf0 = buf.data();
+
+            for(i=0; i<n; i++)
             {
                 double *vec;
-                if(i < i0)
-                    vec = buf0 + 3*(s0+i);
+                if(i < n-i0)
+                    vec = buf0 + 3*(i0+i);
                 else
-                    vec = buf0 + 3*(sa+i-i0);
+                    vec = buf0 + 3*(i-(n-i0));
                 double phi = 0.5*(this->pimh[jk][i] + this->pimh[jk][i+1]);
                 double Vxyz[3];
                 if(basis == 1)
@@ -1494,5 +1588,40 @@ void vtkDiscoReader::calcVFromOrthonormal(double x1, double x2, double x3,
         Vxyz[0] = V[0];
         Vxyz[1] = V[1];
         Vxyz[2] = V[2];
+    }
+}
+
+void vtkDiscoReader::dimsCreate(int numPieces, int dims[])
+{
+    std::vector<int> factors;
+
+    int sqrtn = (int) sqrt(numPieces);
+
+    while(numPieces % 2 == 0)
+    {
+        factors.push_back(2);
+        numPieces /= 2;
+    }
+
+    int p;
+    for(p=3; p<sqrtn && numPieces>1; p += 2)
+        while(numPieces % p == 0)
+        {
+            factors.push_back(p);
+            numPieces /= p;
+        }
+    if(numPieces > 1)
+        factors.push_back(numPieces);
+
+    int i;
+    dims[0] = 1;
+    dims[1] = 1;
+    for(i=factors.size()-1; i>=0; i--)
+    {
+        int f = factors[i];
+        if(dims[0]*this->NzTot <= dims[1]*this->NrTot)
+            dims[0] *= f;
+        else
+            dims[1] *= f;
     }
 }

@@ -33,6 +33,16 @@ private:
     Geom geometry;
     int Nz;
     int Nr;
+    int NrTot;
+    int NzTot;
+    int jA;  //Indices into global array setting our subextent
+    int jB;
+    int kA;
+    int kB;
+    int cja; //Indices into local arrays ignoring extraneous outer cells.
+    int cjb;
+    int cka;
+    int ckb;
     std::vector<int> Np;
     std::vector<int> Index;
     std::vector<int> Id_phi0;
@@ -44,6 +54,7 @@ private:
     int ncells;
     int cellType;
     void SetGeometry();
+    void LoadGridDims(int piece, int numPieces, int ghostLevel);
     void MakeGrid(vtkUnstructuredGrid *output);
     void LoadGrid();
     void AddCells(vtkUnstructuredGrid *output,
@@ -78,6 +89,7 @@ private:
                                 double *Vxyz);
     void calcVFromOrthonormal(double x1, double x2, double x3, double *V, 
                                 double *Vxyz);
+    void dimsCreate(int numPieces, int dims[]);
 };
 
 #endif
