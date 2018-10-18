@@ -43,6 +43,7 @@ private:
     int cjb;
     int cka;
     int ckb;
+    int ghostLevel;
     std::vector<int> Np;
     std::vector<int> Index;
     std::vector<int> Id_phi0;
@@ -50,11 +51,12 @@ private:
     std::vector<double> zkmh;
     std::vector<std::vector<double>> pimh;
     double phimax;
+    std::vector<int> chunkSize;
     std::vector<std::vector<int>> ncellspercell;
     int ncells;
     int cellType;
     void SetGeometry();
-    void LoadGridDims(int piece, int numPieces, int ghostLevel);
+    int LoadGridDims(int piece, int numPieces, int ghostLevel);
     void MakeGrid(vtkUnstructuredGrid *output);
     void LoadGrid();
     void AddCells(vtkUnstructuredGrid *output,
@@ -63,6 +65,7 @@ private:
                         const std::vector<std::vector<vtkIdType>> &cellPoints);
     void AddCellsPolyhedral(vtkUnstructuredGrid *output,
                         const std::vector<std::vector<vtkIdType>> &cellPoints);
+    void TagGhostCells(vtkUnstructuredGrid *output);
     void AddData(vtkUnstructuredGrid *output);
     void AddDataScalar(vtkUnstructuredGrid *output, const char *name, int id);
     void AddDataVector(vtkUnstructuredGrid *output, const char *name, int id0,

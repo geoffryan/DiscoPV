@@ -9,6 +9,7 @@
 #include "vtkDoubleArray.h"
 #include "vtkInformation.h"
 #include "vtkInformationVector.h"
+#include "vtkUnsignedCharArray.h"
 #include "vtkUnstructuredGrid.h"
 #include "vtkPoints.h"
 #include "vtkStreamingDemandDrivenPipeline.h"
@@ -79,7 +80,7 @@ void vtkDiscoReader::SetGeometry()
     hid_t strtype = H5Tcopy(H5T_C_S1);
     H5Tset_size(strtype, H5T_VARIABLE);
 
-    this->readSimple("Opts", "geometry", buf2, strtype);
+    this->readSimple("Opts", "GEOMETRY", buf2, strtype);
 
     if(strcmp(buf, "cylindrical") == 0)
         this->geometry = CYLINDRICAL;
@@ -127,9 +128,19 @@ int vtkDiscoReader::RequestData(vtkInformation*, vtkInformationVector**,
             vtkStreamingDemandDrivenPipeline::UPDATE_NUMBER_OF_GHOST_LEVELS());
 
     this->SetGeometry();
-    this->LoadGridDims(piece, numPieces, ghostLevel);
-    this->MakeGrid(outData);
-    this->AddData(outData);
+    int numPiecesUsed = this->LoadGridDims(piece, numPieces, ghostLevel);
+
+    //Return Empty data if too many pieces requested.
+    if(piece >= numPiecesUsed)
+    {
+        outData->Initialize();
+        return 1;
+    }
+
+    this->LoadGrid();               // Read in Grid data into internal vars
+    this->MakeGrid(outData);        // Assemble grid data into vtk object
+    this->TagGhostCells(outData);    // Tag cells as ghosts.
+    this->AddData(outData);         // Add hydro data.
 
     myfile.open("/Users/geoff/Projects/DiscoPV/data2.txt");
     myfile << "line";
@@ -138,11 +149,13 @@ int vtkDiscoReader::RequestData(vtkInformation*, vtkInformationVector**,
     return 1;
 }
     
-void vtkDiscoReader::LoadGridDims(int piece, int numPieces, int ghostLevel)
+int vtkDiscoReader::LoadGridDims(int piece, int numPieces, int ghostLevel)
 {
     hsize_t hdims[1];
+    std::cout << "Piece " << piece << " Getting r_jph dims\n";
     getH5dims("Grid", "r_jph", hdims);
     this->NrTot = hdims[0] - 1;
+    std::cout << "Piece " << piece << " Getting z_kph dims\n";
     getH5dims("Grid", "z_kph", hdims);
     this->NzTot = hdims[0] - 1;
 
@@ -154,11 +167,6 @@ void vtkDiscoReader::LoadGridDims(int piece, int numPieces, int ghostLevel)
     rank[0] = piece % dims[0];
     rank[1] = piece / dims[0];
 
-    ofstream myfile;
-    myfile.open("/Users/geoff/Projects/DiscoPV/data.txt");
-    myfile << "Piece "<<piece<<" Dims: " << dims[0] << " x " << dims[1] << "\n";
-    myfile << "Piece "<<piece<<" Rank: " << rank[0] << " x " << rank[1] << "\n";
-    myfile.close();
 
     this->jA = (rank[0]*this->NrTot)/dims[0];
     this->jB = ((rank[0]+1)*this->NrTot)/dims[0];
@@ -190,13 +198,37 @@ void vtkDiscoReader::LoadGridDims(int piece, int numPieces, int ghostLevel)
     this->cjb = this->jB==this->NrTot ? Nr : Nr-1;
     this->cka = this->kA==0 ? 0 : 1;
     this->ckb = this->kB==this->NzTot ? Nz : Nz-1;
+
+    this->ghostLevel = ghostLevel;
+
+    char fname[1024];
+    sprintf(fname, "/Users/geoff/Projects/DiscoPV/dims.%03d.txt", piece);
+
+    ofstream myfile;
+    myfile.open(fname);
+    myfile << "Piece "<<piece<<" of " << numPieces << "\n";
+    myfile << "Piece "<<piece<<" FileName: " << this->FileName << "\n";
+    myfile << "Piece "<<piece<<" Dims: " << dims[0] << " x " << dims[1] << "\n";
+    myfile << "Piece "<<piece<<" Rank: " << rank[0] << " x " << rank[1] << "\n";
+    myfile << "Piece "<<piece<<" NrTot: " << this->NrTot << "\n";
+    myfile << "Piece "<<piece<<" NzTot: " << this->NzTot << "\n";
+    myfile << "Piece "<<piece<<" Nr: " << this->Nr << "\n";
+    myfile << "Piece "<<piece<<" Nz: " << this->Nz << "\n";
+    myfile << "Piece "<<piece<<" ghostLevels: " << ghostLevel << "\n";
+    myfile << "Piece "<<piece<<" jAB: " << this->jA << " " << this->jB << "\n";
+    myfile << "Piece "<<piece<<" kAB: " << this->kA << " " << this->kB << "\n";
+    myfile << "Piece "<<piece<<" cjab: " << this->cja << " " << this->cjb << "\n";
+    myfile << "Piece "<<piece<<" ckab: " << this->cka << " " << this->ckb << "\n";
+    myfile.close();
+    
+    std::cout << "Piece " << piece << " GridDims Loaded.\n";
+
+    return numPieces;
 }
 
 void vtkDiscoReader::MakeGrid(vtkUnstructuredGrid *output)
 {
 
-    this->LoadGrid();
-    
     ofstream myfile;
     myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
                     std::ios_base::app);
@@ -360,12 +392,12 @@ void vtkDiscoReader::MakeGrid(vtkUnstructuredGrid *output)
         this->AddCellsPolyhedral(output, cellPoints);
     else
         this->AddCells(output, cellPoints);
-    
+
     myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
                     std::ios_base::app);
     myfile << "Added cells: " << this->ncells << "\n";
     myfile.close();
-    
+
     myfile.open("/Users/geoff/Projects/DiscoPV/data.txt", 
                     std::ios_base::app);
     myfile << "Made Cells\n";
@@ -933,6 +965,41 @@ void vtkDiscoReader::AddCellsPolyhedral(vtkUnstructuredGrid *output,
     this->ncells = nc;
 }
 
+void vtkDiscoReader::TagGhostCells(vtkUnstructuredGrid *output)
+{
+    int i,j,k,c;
+
+    int ghostLevel = this->ghostLevel;
+    int cka = this->cka;
+    int ckb = this->ckb;
+    int cja = this->cja;
+    int cjb = this->cjb;
+
+    vtkUnsignedCharArray *ghosts = output->GetCellGhostArray();
+    if(!ghosts)
+        ghosts = output->AllocateCellGhostArray();
+
+    vtkIdType s = 0;
+    for(k=cka; k<ckb; k++)
+        for(j=cja; j<cjb; j++)
+        {
+            int jk = k * this->Nr + j;
+
+            for(i=0; i<this->Np[jk]; i++)
+                for(c=0; c<this->ncellspercell[jk][i]; c++)
+                {
+                    unsigned char val = ghosts->GetValue(s);
+                    if(     (jA > 0             && j < cja + ghostLevel)
+                        ||  (jB < this->NrTot   && j >= cjb - ghostLevel)
+                        ||  (kA > 0             && k < cka + ghostLevel)
+                        ||  (kB < this->NzTot   && k >= ckb - ghostLevel))
+                        val = val | vtkDataSetAttributes::DUPLICATECELL;
+                    ghosts->SetValue(s, val);
+                    s++;
+                }
+        }
+}
+
 void vtkDiscoReader::LoadGrid()
 {
     int Nr = this->Nr;
@@ -972,11 +1039,62 @@ void vtkDiscoReader::LoadGrid()
     readPatch("Grid", "Id_phi0", this->Id_phi0.data(), H5T_NATIVE_INT,
                 2, start, loc_size, glo_size);
 
+    //Compute "chunk" size. This is the number of contiguous cells stored
+    //forwards of Index[jk].  It is at least Np[jk], but may be larger if we're
+    //lucky.  Only computed for the cells we know we'll need to read.
+
+    this->chunkSize.reserve(Nr*Nz);
+    int i,j,k,jk;
+    for(k=this->cka; k < this->ckb; k++)
+        for(j=this->cja; j < this->cjb; j++)
+        {
+            jk = k*Nr + j;
+            this->chunkSize[jk] = Np[jk];
+            int next = this->Index[jk] + this->Np[jk];
+            int k1, j1;
+            bool end = false;
+            for(j1=j+1; j1<this->cjb; j1++)
+            {
+                int jk1 = k*Nr+j1;
+                if(this->Index[jk1] == next)
+                {
+                    this->chunkSize[jk] += this->Np[jk1];
+                    next += this->Np[jk1];
+                }
+                else
+                {
+                    end = true;
+                    break;
+                }
+            }
+            if(!end)
+                for(k1=k+1; k1<this->ckb; k1++)
+                {
+                    for(j1=this->cja; j1<this->cjb; j1++)
+                    {
+                        int jk1 = k*Nr+j1;
+                        if(this->Index[jk1] == next)
+                        {
+                            this->chunkSize[jk] += this->Np[jk1];
+                            next += this->Np[jk1];
+                        }
+                        else
+                        {
+                            end = true;
+                            break;
+                        }
+                    }
+                    if(end)
+                        break;
+                }
+
+        }
+
+
     double phimax;
     readSimple("Pars", "Phi_Max", &phimax, H5T_NATIVE_DOUBLE);
     this->phimax = phimax;
     
-    int i,jk;
     this->pimh.reserve(Nr*Nz);
 
     for(jk=0; jk<Nr*Nz; jk++)
@@ -1093,9 +1211,10 @@ void vtkDiscoReader::AddDataScalar(vtkUnstructuredGrid *output,
     q->SetName(name);
     q->SetNumberOfValues(this->ncells);
 
-    int i, j, k, s, c;
+    int i, j, k, s, c, b0;
 
     s = 0;
+    b0 = -1;
     for(k=this->cka; k<this->ckb; k++)
         for(j=this->cja; j<this->cjb; j++)
         {
@@ -1106,25 +1225,30 @@ void vtkDiscoReader::AddDataScalar(vtkUnstructuredGrid *output,
             int i0 = s0-sa;
             int n = this->Np[jk];
 
-            start[0] = sa;
-            loc_size[0] = n;
-            buf.reserve(n);
-            this->readPatch("Data", "Cells", buf.data(), H5T_NATIVE_DOUBLE, 
-                                2, start, loc_size, glo_size);
+            if(b0 >= loc_size[0] || b0 < 0)
+            {
+                start[0] = sa;
+                loc_size[0] = this->chunkSize[jk];
+                buf.reserve(this->chunkSize[jk]);
+                b0 = 0;
+                this->readPatch("Data", "Cells", buf.data(), H5T_NATIVE_DOUBLE, 
+                                    2, start, loc_size, glo_size);
+            }
 
             for(i=0; i<n; i++)
             {
                 double val;
                 if(i < n-i0)
-                    val = buf[i0+i];
+                    val = buf[b0+i0+i];
                 else 
-                    val = buf[i-(n-i0)];
+                    val = buf[b0+i-(n-i0)];
                 for(c=0; c<this->ncellspercell[jk][i]; c++)
                 {
                     q->SetValue(s, val);
                     s++;
                 }
             }
+            b0 += n;
         }
     output->GetCellData()->AddArray(q);
     q->Delete();
@@ -1149,10 +1273,12 @@ void vtkDiscoReader::AddDataVector(vtkUnstructuredGrid *output,
     q->SetNumberOfComponents(3);
     q->SetNumberOfTuples(this->ncells);
 
-    int i, j, k, s, c;
+    int i, j, k, s, c, b0;
+    double *buf0;
     int Nr = this->Nr;
 
     s = 0;
+    b0 = -1;
     for(k=this->cka; k<this->ckb; k++)
     {
         double z = 0.5*(this->zkmh[k] + this->zkmh[k+1]);
@@ -1168,20 +1294,24 @@ void vtkDiscoReader::AddDataVector(vtkUnstructuredGrid *output,
 
             double r = 0.5*(this->rjmh[j] + this->rjmh[j+1]);
 
-            start[0] = sa;
-            loc_size[0] = n;
-            buf.reserve(3*n);
-            this->readPatch("Data", "Cells", buf.data(), H5T_NATIVE_DOUBLE, 
-                                2, start, loc_size, glo_size);
-            double *buf0 = buf.data();
+            if(b0 >= loc_size[0]*loc_size[1] || b0 < 0)
+            {
+                start[0] = sa;
+                loc_size[0] = this->chunkSize[jk];
+                buf.reserve(loc_size[0]*loc_size[1]);
+                this->readPatch("Data", "Cells", buf.data(), H5T_NATIVE_DOUBLE, 
+                                    2, start, loc_size, glo_size);
+                buf0 = buf.data();
+                b0 = 0;
+            }
 
             for(i=0; i<n; i++)
             {
                 double *vec;
                 if(i < n-i0)
-                    vec = buf0 + 3*(i0+i);
+                    vec = buf0 + b0 + 3*(i0+i);
                 else
-                    vec = buf0 + 3*(i-(n-i0));
+                    vec = buf0 + b0 + 3*(i-(n-i0));
                 double phi = 0.5*(this->pimh[jk][i] + this->pimh[jk][i+1]);
                 double Vxyz[3];
                 if(basis == 1)
@@ -1198,6 +1328,8 @@ void vtkDiscoReader::AddDataVector(vtkUnstructuredGrid *output,
                     s++;
                 }
             }
+
+            b0 += 3*n;
         }
     }
     output->GetCellData()->AddArray(q);
@@ -1442,9 +1574,30 @@ void vtkDiscoReader::order4(double x0, double x1, double x2, double x3,
 void vtkDiscoReader::getH5dims(const char *group, const char *dset, 
                                 hsize_t *dims)
 {
-    hid_t h5fil = H5Fopen(this->FileName, H5F_ACC_RDWR , H5P_DEFAULT );
+    hid_t h5fil = H5Fopen(this->FileName, H5F_ACC_RDONLY , H5P_DEFAULT );
+    if(h5fil < 0)
+    {
+        std::cout<< "ERR - getH5dims - Could Not Read File: " << this->FileName << "\n";
+        dims[0] = -1;
+        return;
+    }
     hid_t h5grp = H5Gopen1( h5fil , group );
+    if(h5grp < 0)
+    {
+        std::cout<< "ERR - getH5dims - Could Not Open Group: " << group << "\n";
+        dims[0] = -1;
+        H5Fclose(h5fil);
+        return;
+    }
     hid_t h5dst = H5Dopen1( h5grp , dset );
+    if(h5dst < 0)
+    {
+        std::cout<< "ERR - getH5dims - Could Not Open Dataset: " << dset << "\n";
+        dims[0] = -1;
+        H5Gclose(h5grp);
+        H5Fclose(h5fil);
+        return;
+    }
     hid_t h5spc = H5Dget_space( h5dst );
 
     H5Sget_simple_extent_dims( h5spc , dims , NULL);
@@ -1458,9 +1611,30 @@ void vtkDiscoReader::getH5dims(const char *group, const char *dset,
 void vtkDiscoReader::readSimple(const char *group, const char *dset, 
                                 void *data, hid_t type)
 {
-    hid_t h5fil = H5Fopen( this->FileName, H5F_ACC_RDWR, H5P_DEFAULT);
+    hid_t h5fil = H5Fopen( this->FileName, H5F_ACC_RDONLY, H5P_DEFAULT);
+    if(h5fil < 0)
+    {
+        std::cout<< "ERR - readSimple - Could Not Read File: " << this->FileName << "\n";
+        data = NULL;
+        return;
+    }
     hid_t h5grp = H5Gopen1( h5fil , group );
+    if(h5grp < 0)
+    {
+        std::cout<< "ERR - readSimple - Could Not Open Group: " << group << "\n";
+        data = NULL;
+        H5Fclose(h5fil);
+        return;
+    }
     hid_t h5dst = H5Dopen1( h5grp , dset );
+    if(h5dst < 0)
+    {
+        std::cout<< "ERR - readSimple - Could Not Open Dataset: " << dset << "\n";
+        data = NULL;
+        H5Gclose(h5grp);
+        H5Fclose(h5fil);
+        return;
+    }
 
     H5Dread( h5dst , type , H5S_ALL , H5S_ALL , H5P_DEFAULT , data );
 
@@ -1473,9 +1647,30 @@ void vtkDiscoReader::readPatch(const char *group, const char *dset, void *data,
                                 hid_t type, int dim, hsize_t *start, 
                                 hsize_t *loc_size, hsize_t *glo_size)
 {
-    hid_t h5fil = H5Fopen( this->FileName , H5F_ACC_RDWR , H5P_DEFAULT );
+    hid_t h5fil = H5Fopen( this->FileName , H5F_ACC_RDONLY , H5P_DEFAULT );
+    if(h5fil < 0)
+    {
+        std::cout<< "ERR - readPatch - Could Not Read File: " << this->FileName << "\n";
+        data = NULL;
+        return;
+    }
     hid_t h5grp = H5Gopen1( h5fil , group );
+    if(h5grp < 0)
+    {
+        std::cout<< "ERR - readPatch - Could Not Open Group: " << group << "\n";
+        data = NULL;
+        H5Fclose(h5fil);
+        return;
+    }
     hid_t h5dst = H5Dopen1( h5grp , dset );
+    if(h5dst < 0)
+    {
+        std::cout<< "ERR - readPatch - Could Not Open Dataset: " << dset << "\n";
+        data = NULL;
+        H5Gclose(h5grp);
+        H5Fclose(h5fil);
+        return;
+    }
 
     hsize_t mdims[dim];
     hsize_t fdims[dim];
