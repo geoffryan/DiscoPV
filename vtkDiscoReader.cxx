@@ -102,6 +102,12 @@ int vtkDiscoReader::RequestInformation(vtkInformation*, vtkInformationVector**,
 
     outInfo->Set(CAN_HANDLE_PIECE_REQUEST(), 1);
 
+    double tRange[2] = {2.3, 3.1};
+    double times[1];
+    readSimple("Grid", "T", times, H5T_NATIVE_DOUBLE);
+    outInfo->Set(vtkStreamingDemandDrivenPipeline::TIME_STEPS(), times, 1);
+    //outInfo->Set(vtkStreamingDemandDrivenPipeline::TIME_RANGE(), tRange, 2);
+
     return 1;
 }
 
@@ -124,6 +130,11 @@ int vtkDiscoReader::RequestData(vtkInformation*, vtkInformationVector**,
                 vtkStreamingDemandDrivenPipeline::UPDATE_NUMBER_OF_PIECES());
     int ghostLevel = outInfo->Get(
             vtkStreamingDemandDrivenPipeline::UPDATE_NUMBER_OF_GHOST_LEVELS());
+
+    double time = outInfo->Get(
+                        vtkStreamingDemandDrivenPipeline::UPDATE_TIME_STEP());
+
+    std::cout << "Requested time: " << time << "\n";
 
     this->SetGeometry();
     int numPiecesUsed = this->LoadGridDims(piece, numPieces, ghostLevel);

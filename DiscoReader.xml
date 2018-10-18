@@ -1,17 +1,18 @@
 <ServerManagerConfiguration>
-    <ProxyGroup name="sources">
+    <ProxyGroup name="internal_sources">
         <!-- ============================================================== -->
-        <SourceProxy name="DiscoReader" class="vtkDiscoReader"  
+        <Proxy name="DiscoReaderCore" class="vtkDiscoReader"  
             label="Disco Reader">
             <Documentation
                 long_help="Read a Disco Checkpoint (.h5) file."
                 short_help="Read a Disco Checkpoint (.h5) file.">
             </Documentation>
             <StringVectorProperty
-                name="Filename"
+                name="FileName"
                 animateable="0"
                 command="SetFileName"
-                number_of_elements="1">
+                number_of_elements="1"
+                panel_visibility="never">
                 <FileListDomain name="files" />
                 <Documentation>
                     This property specifies the file name for Disco Reader.
@@ -21,7 +22,8 @@
                 name="Mesh Type"
                 command="SetMeshType"
                 number_of_elements="1"
-                default_values="0">
+                default_values="0"
+                animateable="0">
                 <EnumerationDomain name="enum">
                     <Entry value="0" text="Tetra"/>
                     <Entry value="1" text="Polyhedron"/>
@@ -31,13 +33,73 @@
                     This property specifies the mesh type to use.
                 </Documentation>
             </IntVectorProperty>
+            <DoubleVectorProperty
+                name="TimestepValues"
+                repeatable="1"
+                information_only="1">
+                <TimeStepsInformationHelper/>
+                <Documentation>
+                    Available time step values.
+                </Documentation>
+            </DoubleVectorProperty>
 
             <Hints>
                 <ReaderFactory extensions="h5"
                                 file_description="Disco Checkpoints" />
             </Hints>
-        </SourceProxy>
+        </Proxy>
         <!-- End DiscoReader -->
+    </ProxyGroup>
+    <ProxyGroup name="sources">
+        <SourceProxy class="vtkFileSeriesReader"
+            file_name_method="SetFileName"
+            label="Disco Reader"
+            name="DiscoReader"
+            si_class="vtkSIMetaReaderProxy">
+            <Documentation  long_help="Reads Disco checkpoint files."
+                short_help="Reads Disco checkpoint files.">
+                The Disco Reader loads simulation data stored in Disco's HDF5
+                format. The output of this reader is a vtkUnstructuredGrid.
+            </Documentation>
+            <SubProxy>
+                <Proxy  name="Reader"
+                    proxygroup="internal_sources"
+                    proxyname="DiscoReaderCore">
+                </Proxy>
+                <ExposedProperties>
+                    <Property name="Mesh Type" />
+                </ExposedProperties>
+            </SubProxy>
+            <StringVectorProperty command="GetCurrentFileName"
+                information_only="1"
+                name="FileNameInfo">
+                <SimpleStringInformationHelper />
+            </StringVectorProperty>
+            <StringVectorProperty animateable="0"
+                clean_command="RemoveAllFileNames"
+                command="AddFileName"
+                name="FileNames"
+                number_of_elements="0"
+                panel_visibility="never"
+                repeat_command="1">
+                <FileListDomain name="files" />
+                <Documentation>
+                    The list of files to be read by the reader.
+                </Documentation>
+            </StringVectorProperty>
+            <DoubleVectorProperty information_only="1"
+                name="TimestepValues"
+                repeatable="1">
+                <TimeStepsInformationHelper />
+                <Documentation>
+                    Available timestep values.
+                </Documentation>
+            </DoubleVectorProperty>
+            <Hints>
+                <ReaderFactory extensions="h5" 
+                    file_description="Disco checkpoints" />
+            </Hints>
+        </SourceProxy>
     </ProxyGroup>
     <!-- End Filters Group -->
 </ServerManagerConfiguration>
