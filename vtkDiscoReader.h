@@ -86,6 +86,8 @@ private:
                                 hsize_t *loc_size, hsize_t *glo_size);
     void readSimple(const char *group, const char *dset, void *data, 
                         hid_t type);
+    void readString(const char *group, const char *dset, char *buf, 
+                        int len);
     void getH5dims(const char *group, const char *dset, hsize_t *dims);
     void calcXYZ(double x1, double x2, double x3, double *xyz);
     void calcVFromContravariant(double x1, double x2, double x3, double *V, 

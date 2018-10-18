@@ -75,18 +75,16 @@ void vtkDiscoReader::SetGeometry()
 {
     char buf[256];
     buf[255] = '\0';
-    char *buf2[1] = {buf};
 
-    hid_t strtype = H5Tcopy(H5T_C_S1);
-    H5Tset_size(strtype, H5T_VARIABLE);
+    this->readString("Opts", "GEOMETRY", buf, 256);
 
-    this->readSimple("Opts", "GEOMETRY", buf2, strtype);
+    std::cout << "Geometry: " << buf << "\n";
 
-    if(strcmp(buf, "cylindrical") == 0)
+    if(     strncmp(buf, "cylindrical", 11) == 0)
         this->geometry = CYLINDRICAL;
-    else if(strcmp(buf, "spherical") == 0)
+    else if(strncmp(buf, "spherical", 9) == 0)
         this->geometry = SPHERICAL;
-    else if(strcmp(buf, "cartesian") == 0)
+    else if(strncmp(buf, "cartesian", 9) == 0)
         this->geometry = CARTESIAN;
     else
         this->geometry = CYLINDRICAL;
@@ -1641,6 +1639,34 @@ void vtkDiscoReader::readSimple(const char *group, const char *dset,
     H5Dclose( h5dst );
     H5Gclose( h5grp );
     H5Fclose( h5fil );
+}
+
+void vtkDiscoReader::readString(const char *group, const char *dset, 
+                                char *buf, int len)
+{
+    hid_t strtype = H5Tcopy(H5T_C_S1);
+    H5Tset_size(strtype, H5T_VARIABLE);
+
+    hid_t h5fil = H5Fopen( this->FileName , H5F_ACC_RDONLY , H5P_DEFAULT );
+    hid_t h5grp = H5Gopen1( h5fil , group );
+    hid_t h5dst = H5Dopen1( h5grp , dset );
+
+    hid_t space = H5Dget_space(h5dst);
+    hsize_t dims[1];
+    H5Sget_simple_extent_dims(space, dims, NULL);
+
+    char **rdata = (char **)malloc(dims[0] * sizeof(char *));
+    H5Dread(h5dst, strtype, H5S_ALL, H5S_ALL, H5P_DEFAULT, rdata);
+    strncpy(buf, rdata[0], len-1);
+    buf[len-1] = '\0';
+
+    H5Dvlen_reclaim(strtype, space, H5P_DEFAULT, rdata);
+    free(rdata);
+    H5Dclose(h5dst);
+    H5Sclose(space);
+    H5Tclose(strtype);
+    H5Gclose(h5grp);
+    H5Fclose(h5fil);
 }
 
 void vtkDiscoReader::readPatch(const char *group, const char *dset, void *data, 
